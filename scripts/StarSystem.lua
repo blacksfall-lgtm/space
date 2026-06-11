@@ -128,11 +128,11 @@ local function CreateStarBodyMaterial(color)
         return mat
     end
 
-    -- DiffColor 深红：强化暗红底色，压低黄色感
-    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.46, 0.30, 1.0)))
+    -- DiffColor 更深红：暗红底色为主，压低橙感
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.42, 0.28, 1.0)))
 
-    -- 深红自发光：暗面微亮但保持深红调，不偏黄
-    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.58, 0.10, 0.025)))
+    -- 极低自发光：暗面微微可见，绝不冲淡纹理对比
+    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.52, 0.085, 0.022)))
 
     return mat
 end
@@ -211,8 +211,8 @@ local function BuildStar(parentNode, color, size, name)
     local coronaNode = nil
     local coronaBbs = nil
     local coronaMat = nil
-    local coronaBaseScale = 1.12
-    local coronaBaseAlpha = 0.07
+    local coronaBaseScale = 1.07
+    local coronaBaseAlpha = 0.045
 
     if (not STAR_RENDER_DEBUG_BODY_ONLY) and STAR_ENABLE_CORONA then
         coronaNode, coronaBbs, coronaMat = CreateStarBillboard(
@@ -506,13 +506,13 @@ function StarSystem.Update(dt, elapsedTime)
         -- 下面才允许正式版本的 emissive / corona / flare
         local color = starLayers_.baseColor
 
-        -- 深红自发光脉冲：围绕 (0.58, 0.10, 0.025) 做 ±5% 微弱呼吸
+        -- 深红自发光脉冲：围绕 (0.52, 0.085, 0.022) 做 ±5% 微弱呼吸
         local emPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.04
             + math.sin(elapsedTime * 0.83) * 0.02
         starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
-            0.58 * emPulse,  -- R: ~0.55-0.61
-            0.10 * emPulse,  -- G: ~0.094-0.106
-            0.025 * emPulse  -- B: ~0.024-0.026
+            0.52 * emPulse,  -- R: ~0.49-0.55
+            0.085 * emPulse, -- G: ~0.080-0.090
+            0.022 * emPulse  -- B: ~0.021-0.023
         )))
 
         -- RimGlow 边缘环呼吸（nil-safe）
