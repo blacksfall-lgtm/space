@@ -201,12 +201,14 @@ local function BuildStar(parentNode, color, size, name)
     local glowShells = {}  -- { {node, bbs, mat, baseAlpha, baseScale, color}, ... }
 
     local GLOW_RING_LAYERS = {
-        -- Layer A: 紧贴边缘的亮热环（Billboard 尺寸略大于星体直径）
-        { scale = 1.12, alpha = 0.45, color = {1.0, 0.75, 0.45} },
-        -- Layer B: 中层红橙柔光
-        { scale = 1.22, alpha = 0.28, color = {1.0, 0.50, 0.18} },
-        -- Layer C: 外层深红淡晕
-        { scale = 1.35, alpha = 0.12, color = {1.0, 0.32, 0.10} },
+        -- 纹理亮环在 dist=0.85 处；Billboard size 是半径(每侧延伸量)
+        -- 星体球半径=0.5；要让纹理亮环对齐星体边缘：0.85 * size = 0.5 → size≈0.59
+        -- Layer A: 紧贴边缘（亮环刚好在星体边缘）
+        { scale = 0.60, alpha = 0.50, color = {1.0, 0.75, 0.45} },
+        -- Layer B: 稍外扩（亮环略超星体边缘）
+        { scale = 0.66, alpha = 0.30, color = {1.0, 0.50, 0.18} },
+        -- Layer C: 外层淡晕
+        { scale = 0.74, alpha = 0.14, color = {1.0, 0.32, 0.10} },
     }
 
     if not STAR_RENDER_DEBUG_BODY_ONLY then
