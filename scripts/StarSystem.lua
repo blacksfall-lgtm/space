@@ -195,19 +195,31 @@ local function BuildStar(parentNode, color, size, name)
     bodyModel:SetMaterial(CreateStarBodyMaterial(color))
     bodyModel.castShadows = false
 
-    -- ========== Layer 2: 边缘高亮环 RimGlow（贴着球体边缘的亮环） ==========
-    local rimNode = nil
-    local rimBbs = nil
-    local rimMat = nil
-    local rimBaseScale = 1.01
-    local rimBaseAlpha = 0.28
+    -- ========== Layer 2: 发光描边球壳 GlowShell（3D包裹式边缘发光） ==========
+    local glowShellNode = nil
+    local glowShellMat = nil
+    local glowShellBaseAlpha = 0.18
+    local glowShellScale = 1.025  -- 比本体大2.5%，形成薄壳描边
 
     if not STAR_RENDER_DEBUG_BODY_ONLY then
-        rimNode, rimBbs, rimMat = CreateStarBillboard(
-            node, "StarRimGlow", STAR_TEXTURES.corona,
-            rimBaseScale,
-            1.0, 0.48, 0.14, rimBaseAlpha  -- #FF7A24 红橙亮环
-        )
+        glowShellNode = node:CreateChild("StarGlowShell")
+        glowShellNode:SetScale(Vector3(glowShellScale, glowShellScale, glowShellScale))
+
+        local shellModel = glowShellNode:CreateComponent("StaticModel")
+        shellModel:SetModel(cache:GetResource("Model", "Models/Sphere.mdl"))
+        shellModel.castShadows = false
+
+        -- Additive 混合材质：纯色红橙 + 低透明度
+        glowShellMat = Material:new()
+        local addTech = cache:GetResource("Technique", "Techniques/DiffAddAlpha.xml")
+        if addTech then
+            glowShellMat:SetTechnique(0, addTech)
+        end
+        -- #FF7A24 红橙描边色，Alpha 控制发光强度
+        glowShellMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
+            1.0, 0.48, 0.14, glowShellBaseAlpha
+        )))
+        shellModel:SetMaterial(glowShellMat)
     end
 
     -- ========== Layer 3: 日冕（条件创建） ==========
@@ -254,10 +266,9 @@ local function BuildStar(parentNode, color, size, name)
     starLayers_ = {
         body = bodyNode,
         bodyMat = bodyModel:GetMaterial(0),
-        rim = rimNode,
-        rimBbs = rimBbs,
-        rimMat = rimMat,
-        rimBaseAlpha = rimBaseAlpha,
+        glowShell = glowShellNode,
+        glowShellMat = glowShellMat,
+        glowShellBaseAlpha = glowShellBaseAlpha,
         corona = coronaNode,
         coronaBbs = coronaBbs,
         coronaMat = coronaMat,
@@ -518,11 +529,13 @@ function StarSystem.Update(dt, elapsedTime)
             0.016 * emPulse  -- B: ~0.015-0.017
         )))
 
-        -- RimGlow 边缘环呼吸（nil-safe）
-        if starLayers_.rim and starLayers_.rimMat then
-            local rimAlpha = starLayers_.rimBaseAlpha + math.sin(elapsedTime * 0.5) * 0.03
-            starLayers_.rimMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
-                1.0, 0.48, 0.14, rimAlpha  -- #FF7A24
+        -- GlowShell 发光描边呼吸（nil-safe）
+        if starLayers_.glowShell and starLayers_.glowShellMat then
+            local shellAlpha = starLayers_.glowShellBaseAlpha
+                + math.sin(elapsedTime * 0.6) * 0.03
+                + math.sin(elapsedTime * 1.1) * 0.015
+            starLayers_.glowShellMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
+                1.0, 0.48, 0.14, shellAlpha  -- #FF7A24 描边呼吸
             )))
         end
 
