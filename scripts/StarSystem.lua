@@ -40,27 +40,9 @@ local PLANET_TEXTURE_MAP = {
     DESERT = { diffuse = "Textures/Planets/rocky_diffuse.png", normal = "Textures/Planets/rocky_normal.png" },
 }
 
-local _test2Done = false  -- 测试2：仅对第一颗行星生效一次
-
 local function CreatePlanetMaterial(r, g, b, planetType)
     local mat = Material:new()
     local texInfo = planetType and PLANET_TEXTURE_MAP[planetType]
-
-    -- 🔴 测试2: 第一颗行星强制使用红巨星贴图做交叉验证
-    if not _test2Done then
-        _test2Done = true
-        local starTex = cache:GetResource("Texture2D", "image/恒星贴图/star_surface_red_giant.png")
-        if starTex then
-            print("[StarSystem] TEST2: planet using star texture, size=" .. starTex:GetWidth() .. "x" .. starTex:GetHeight())
-            mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/Diff.xml"))
-            mat:SetTexture(TU_DIFFUSE, starTex)
-            mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 1.0, 1.0, 1.0)))
-            return mat
-        else
-            print("[StarSystem] TEST2: FAILED to load star texture on planet")
-        end
-    end
-
     local diffTex = texInfo and cache:GetResource("Texture2D", texInfo.diffuse)
     local normTex = texInfo and texInfo.normal and cache:GetResource("Texture2D", texInfo.normal)
 
@@ -104,9 +86,7 @@ end
 -- 红巨星贴图路径
 ------------------------------------------------------------
 local STAR_TEXTURES = {
-    -- 🔴 测试1: 临时换成已知能显示的行星贴图，验证材质链路
-    surface  = "Textures/Planets/lava_diffuse.png",
-    -- surface  = "image/恒星贴图/star_surface_red_giant.png",  -- 原始路径（测试后恢复）
+    surface  = "image/恒星贴图/star_surface_red_giant.png",
     emissive = "image/恒星贴图/star_emissive_red_giant.png",
     normal   = "image/恒星贴图/star_normal_red_giant.png",
     noise01  = "image/恒星贴图/star_noise_01.png",
