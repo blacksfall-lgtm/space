@@ -128,11 +128,11 @@ local function CreateStarBodyMaterial(color)
         return mat
     end
 
-    -- DiffColor 更深红：暗红底色为主，压低橙感
-    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.42, 0.28, 1.0)))
+    -- DiffColor 深红：暗红底色为主，保留纹理层次
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.40, 0.28, 1.0)))
 
-    -- 极低自发光：暗面微微可见，绝不冲淡纹理对比
-    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.52, 0.085, 0.022)))
+    -- 极低自发光：暗面隐约可见，最大化纹理对比
+    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.48, 0.075, 0.018)))
 
     return mat
 end
@@ -196,14 +196,14 @@ local function BuildStar(parentNode, color, size, name)
     local rimNode = nil
     local rimBbs = nil
     local rimMat = nil
-    local rimBaseScale = 1.03
-    local rimBaseAlpha = 0.22
+    local rimBaseScale = 1.012
+    local rimBaseAlpha = 0.28
 
     if not STAR_RENDER_DEBUG_BODY_ONLY then
         rimNode, rimBbs, rimMat = CreateStarBillboard(
             node, "StarRimGlow", STAR_TEXTURES.corona,
             rimBaseScale,
-            1.0, 0.35, 0.14, rimBaseAlpha  -- #FF5A24 偏红橙
+            1.0, 0.48, 0.14, rimBaseAlpha  -- #FF7A24 红橙亮环
         )
     end
 
@@ -211,8 +211,8 @@ local function BuildStar(parentNode, color, size, name)
     local coronaNode = nil
     local coronaBbs = nil
     local coronaMat = nil
-    local coronaBaseScale = 1.07
-    local coronaBaseAlpha = 0.045
+    local coronaBaseScale = 1.05
+    local coronaBaseAlpha = 0.035
 
     if (not STAR_RENDER_DEBUG_BODY_ONLY) and STAR_ENABLE_CORONA then
         coronaNode, coronaBbs, coronaMat = CreateStarBillboard(
@@ -506,20 +506,20 @@ function StarSystem.Update(dt, elapsedTime)
         -- 下面才允许正式版本的 emissive / corona / flare
         local color = starLayers_.baseColor
 
-        -- 深红自发光脉冲：围绕 (0.52, 0.085, 0.022) 做 ±5% 微弱呼吸
+        -- 深红自发光脉冲：围绕 (0.48, 0.075, 0.018) 做 ±5% 微弱呼吸
         local emPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.04
             + math.sin(elapsedTime * 0.83) * 0.02
         starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
-            0.52 * emPulse,  -- R: ~0.49-0.55
-            0.085 * emPulse, -- G: ~0.080-0.090
-            0.022 * emPulse  -- B: ~0.021-0.023
+            0.48 * emPulse,  -- R: ~0.45-0.51
+            0.075 * emPulse, -- G: ~0.071-0.079
+            0.018 * emPulse  -- B: ~0.017-0.019
         )))
 
         -- RimGlow 边缘环呼吸（nil-safe）
         if starLayers_.rim and starLayers_.rimMat then
             local rimAlpha = starLayers_.rimBaseAlpha + math.sin(elapsedTime * 0.5) * 0.03
             starLayers_.rimMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
-                1.0, 0.35, 0.14, rimAlpha
+                1.0, 0.48, 0.14, rimAlpha  -- #FF7A24
             )))
         end
 
