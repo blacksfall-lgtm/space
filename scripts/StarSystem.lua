@@ -132,11 +132,11 @@ local function CreateStarBodyMaterial(color)
         return mat
     end
 
-    -- DiffColor 深红：压低绿通道，保留纹理暗红层次
-    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.38, 0.26, 1.0)))
+    -- DiffColor 深红：压低亮度，让贴图暗部纹理可见
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(0.75, 0.28, 0.18, 1.0)))
 
-    -- 高自发光：驱动 HDR Bloom 产生自然边缘辉光溢出
-    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(2.5, 0.6, 0.15)))
+    -- 自发光：刚好超过 bloomThreshold(0.8) 即可触发边缘辉光，不过曝
+    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.95, 0.22, 0.05)))
 
     return mat
 end
@@ -524,13 +524,13 @@ function StarSystem.Update(dt, elapsedTime)
         -- 下面才允许正式版本的 emissive / corona / flare
         local color = starLayers_.baseColor
 
-        -- 高自发光脉冲：围绕 (2.5, 0.6, 0.15) 做 ±5% 微弱呼吸（驱动 Bloom）
-        local emPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.04
-            + math.sin(elapsedTime * 0.83) * 0.02
+        -- 自发光脉冲：围绕 (0.95, 0.22, 0.05) 做 ±6% 微弱呼吸（刚超 bloomThreshold）
+        local emPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.05
+            + math.sin(elapsedTime * 0.83) * 0.03
         starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
-            2.5 * emPulse,
-            0.6 * emPulse,
-            0.15 * emPulse
+            0.95 * emPulse,
+            0.22 * emPulse,
+            0.05 * emPulse
         )))
 
         -- Billboard 环形辉光：呼吸脉动（尺寸 + 透明度微变）
