@@ -43,6 +43,22 @@ local PLANET_TEXTURE_MAP = {
 local function CreatePlanetMaterial(r, g, b, planetType)
     local mat = Material:new()
     local texInfo = planetType and PLANET_TEXTURE_MAP[planetType]
+
+    -- 🔴 测试2: 第一颗行星强制使用红巨星贴图做交叉验证
+    if not CreatePlanetMaterial._test2Done then
+        CreatePlanetMaterial._test2Done = true
+        local starTex = cache:GetResource("Texture2D", "image/恒星贴图/star_surface_red_giant.png")
+        if starTex then
+            print("[StarSystem] TEST2: planet using star texture, size=" .. starTex:GetWidth() .. "x" .. starTex:GetHeight())
+            mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/Diff.xml"))
+            mat:SetTexture(TU_DIFFUSE, starTex)
+            mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 1.0, 1.0, 1.0)))
+            return mat
+        else
+            print("[StarSystem] TEST2: FAILED to load star texture on planet")
+        end
+    end
+
     local diffTex = texInfo and cache:GetResource("Texture2D", texInfo.diffuse)
     local normTex = texInfo and texInfo.normal and cache:GetResource("Texture2D", texInfo.normal)
 
@@ -86,7 +102,9 @@ end
 -- 红巨星贴图路径
 ------------------------------------------------------------
 local STAR_TEXTURES = {
-    surface  = "image/恒星贴图/star_surface_red_giant.png",
+    -- 🔴 测试1: 临时换成已知能显示的行星贴图，验证材质链路
+    surface  = "Textures/Planets/lava_diffuse.png",
+    -- surface  = "image/恒星贴图/star_surface_red_giant.png",  -- 原始路径（测试后恢复）
     emissive = "image/恒星贴图/star_emissive_red_giant.png",
     normal   = "image/恒星贴图/star_normal_red_giant.png",
     noise01  = "image/恒星贴图/star_noise_01.png",
@@ -106,34 +124,36 @@ local starLayers_ = nil
 
 ------------------------------------------------------------
 -- 创建恒星本体材质
--- 🔴 调试模式：Unlit.xml（零光照），纯贴图验证
+-- 🔴 调试模式：Diff.xml + 白色DiffColor + 详细日志
 ------------------------------------------------------------
 local function CreateStarBodyMaterial(color)
     local mat = Material:new()
 
-    -- 优先 Unlit（完全无光照），fallback 到 Diff
-    local tech = cache:GetResource("Technique", "Techniques/NoTextureUnlit.xml")
-    if not tech then
-        print("[StarSystem] WARNING: Unlit.xml not found, falling back to Diff.xml")
-        tech = cache:GetResource("Technique", "Techniques/Diff.xml")
+    local tech = cache:GetResource("Technique", "Techniques/Diff.xml")
+    if tech then
+        print("[StarSystem] DEBUG: Diff.xml technique loaded")
+        mat:SetTechnique(0, tech)
+    else
+        print("[StarSystem] ERROR: Diff.xml technique missing")
     end
-    mat:SetTechnique(0, tech)
 
-    -- Surface 贴图
     local surfaceTex = cache:GetResource("Texture2D", STAR_TEXTURES.surface)
+
     if surfaceTex then
-        mat:SetTexture(TU_DIFFUSE, surfaceTex)
         print("[StarSystem] DEBUG: star surface texture LOADED OK: " .. STAR_TEXTURES.surface)
         print("[StarSystem] DEBUG: texture size = " .. surfaceTex:GetWidth() .. "x" .. surfaceTex:GetHeight())
-        -- 🟢 强制绿色测试：确认材质确实应用到了可见球体
-        mat:SetShaderParameter("MatDiffColor", Variant(Vector4(0.0, 1.0, 0.0, 1.0)))
+
+        mat:SetTexture(TU_DIFFUSE, surfaceTex)
     else
         print("[StarSystem] ERROR: FAILED to load star surface texture: " .. STAR_TEXTURES.surface)
-        -- 洋红色 = 贴图加载失败的醒目错误标识
         mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.0, 1.0, 1.0)))
+        return mat
     end
 
-    -- 调试阶段：无自发光
+    -- 必须白色，代表不染色，只看贴图
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 1.0, 1.0, 1.0)))
+
+    -- 调试阶段必须关闭自发光
     mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.0, 0.0, 0.0)))
 
     return mat
@@ -478,10 +498,10 @@ function StarSystem.Update(dt, elapsedTime)
         local bodyRotY = elapsedTime * 1.2
         starLayers_.body:SetRotation(Quaternion(bodyRotY, Vector3.UP))
 
-        -- 调试模式下，强制关闭自发光，保持绿色测试，然后立刻 return
+        -- 调试阶段只验证贴图采样，不允许 emissive / corona / flare 干扰
         if STAR_RENDER_DEBUG_BODY_ONLY then
             starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.0, 0.0, 0.0)))
-            starLayers_.bodyMat:SetShaderParameter("MatDiffColor", Variant(Vector4(0.0, 1.0, 0.0, 1.0)))
+            starLayers_.bodyMat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 1.0, 1.0, 1.0)))
             return
         end
 
