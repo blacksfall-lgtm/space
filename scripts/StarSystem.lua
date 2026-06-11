@@ -40,13 +40,15 @@ local PLANET_TEXTURE_MAP = {
     DESERT = { diffuse = "Textures/Planets/rocky_diffuse.png", normal = "Textures/Planets/rocky_normal.png" },
 }
 
+local _test2Done = false  -- 测试2：仅对第一颗行星生效一次
+
 local function CreatePlanetMaterial(r, g, b, planetType)
     local mat = Material:new()
     local texInfo = planetType and PLANET_TEXTURE_MAP[planetType]
 
     -- 🔴 测试2: 第一颗行星强制使用红巨星贴图做交叉验证
-    if not CreatePlanetMaterial._test2Done then
-        CreatePlanetMaterial._test2Done = true
+    if not _test2Done then
+        _test2Done = true
         local starTex = cache:GetResource("Texture2D", "image/恒星贴图/star_surface_red_giant.png")
         if starTex then
             print("[StarSystem] TEST2: planet using star texture, size=" .. starTex:GetWidth() .. "x" .. starTex:GetHeight())
