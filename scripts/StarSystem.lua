@@ -96,47 +96,48 @@ local STAR_TEXTURES = {
     mask     = "image/恒星贴图/star_mask_red_giant.png",
 }
 
--- ========== 调试开关（Phase 1: 仅本体） ==========
-local STAR_RENDER_DEBUG_BODY_ONLY = true   -- true=只渲染恒星本体，关闭所有外层
-local STAR_ENABLE_CORONA = false           -- 是否启用日冕层
-local STAR_ENABLE_FLARE  = false           -- 是否启用耀斑层
+-- ========== Phase 2: 自发光恒星 ==========
+local STAR_RENDER_DEBUG_BODY_ONLY = false  -- Phase 1 已通过，进入正式渲染
+local STAR_ENABLE_CORONA = true            -- 启用日冕层（小范围）
+local STAR_ENABLE_FLARE  = false           -- 耀斑暂不开启
 
 -- 恒星各层节点引用（用于动态更新）
 local starLayers_ = nil
 
 ------------------------------------------------------------
 -- 创建恒星本体材质
--- 🔴 调试模式：Diff.xml + 白色DiffColor + 详细日志
+-- Phase 2: Diff.xml + 低强度自发光（让暗面不死黑）
 ------------------------------------------------------------
 local function CreateStarBodyMaterial(color)
     local mat = Material:new()
 
     local tech = cache:GetResource("Technique", "Techniques/Diff.xml")
     if tech then
-        print("[StarSystem] DEBUG: Diff.xml technique loaded")
         mat:SetTechnique(0, tech)
     else
         print("[StarSystem] ERROR: Diff.xml technique missing")
     end
 
     local surfaceTex = cache:GetResource("Texture2D", STAR_TEXTURES.surface)
-
     if surfaceTex then
-        print("[StarSystem] DEBUG: star surface texture LOADED OK: " .. STAR_TEXTURES.surface)
-        print("[StarSystem] DEBUG: texture size = " .. surfaceTex:GetWidth() .. "x" .. surfaceTex:GetHeight())
-
         mat:SetTexture(TU_DIFFUSE, surfaceTex)
+        print("[StarSystem] star surface texture loaded: " .. surfaceTex:GetWidth() .. "x" .. surfaceTex:GetHeight())
     else
         print("[StarSystem] ERROR: FAILED to load star surface texture: " .. STAR_TEXTURES.surface)
         mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.0, 1.0, 1.0)))
         return mat
     end
 
-    -- 必须白色，代表不染色，只看贴图
+    -- 白色DiffColor = 不染色，贴图原色
     mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 1.0, 1.0, 1.0)))
 
-    -- 调试阶段必须关闭自发光
-    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.0, 0.0, 0.0)))
+    -- 低强度自发光：让暗面也有红橙亮度，但不冲掉纹理
+    local emissivePower = 0.8
+    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
+        1.0 * emissivePower,   -- 0.8
+        0.28 * emissivePower,  -- 0.224
+        0.08 * emissivePower   -- 0.064
+    )))
 
     return mat
 end
@@ -194,6 +195,7 @@ local function BuildStar(parentNode, color, size, name)
     local bodyModel = bodyNode:CreateComponent("StaticModel")
     bodyModel:SetModel(cache:GetResource("Model", "Models/Sphere.mdl"))
     bodyModel:SetMaterial(CreateStarBodyMaterial(color))
+    bodyModel.castShadows = false
 
     -- ========== Layer 2: 日冕（条件创建） ==========
     local coronaNode = nil
@@ -490,11 +492,15 @@ function StarSystem.Update(dt, elapsedTime)
         -- 下面才允许正式版本的 emissive / corona / flare
         local color = starLayers_.baseColor
 
-        -- 自发光脉冲（emissive 强度围绕 0.85 轻微变化）
-        local emPulse = 0.85 + math.sin(elapsedTime * 0.35) * 0.06
-            + math.sin(elapsedTime * 0.83) * 0.03
+        -- 低强度自发光脉冲：围绕 emissivePower=0.8 做 ±0.05 微弱呼吸
+        -- 基准值 (0.8, 0.224, 0.064)，不使用 color * 高倍数以免过曝
+        local emBase = 0.8
+        local emPulse = emBase + math.sin(elapsedTime * 0.35) * 0.04
+            + math.sin(elapsedTime * 0.83) * 0.02
         starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
-            color[1] * emPulse, color[2] * emPulse, color[3] * emPulse
+            1.0 * emPulse,   -- R: ~0.76-0.84
+            0.28 * emPulse,  -- G: ~0.21-0.24
+            0.08 * emPulse   -- B: ~0.06-0.07
         )))
 
         -- 日冕透明度呼吸（nil-safe）
