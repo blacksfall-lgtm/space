@@ -128,11 +128,11 @@ local function CreateStarBodyMaterial(color)
         return mat
     end
 
-    -- DiffColor 偏红：保留暗红底色和红橙纹理层次
-    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.55, 0.38, 1.0)))
+    -- DiffColor 深红：强化暗红底色，压低黄色感
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.46, 0.30, 1.0)))
 
-    -- 低强度深红橙自发光：暗面微亮但不冲淡表面纹理对比
-    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.65, 0.14, 0.04)))
+    -- 深红自发光：暗面微亮但保持深红调，不偏黄
+    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.58, 0.10, 0.025)))
 
     return mat
 end
@@ -192,22 +192,37 @@ local function BuildStar(parentNode, color, size, name)
     bodyModel:SetMaterial(CreateStarBodyMaterial(color))
     bodyModel.castShadows = false
 
-    -- ========== Layer 2: 日冕（条件创建） ==========
+    -- ========== Layer 2: 边缘高亮环 RimGlow（贴着球体边缘的亮环） ==========
+    local rimNode = nil
+    local rimBbs = nil
+    local rimMat = nil
+    local rimBaseScale = 1.03
+    local rimBaseAlpha = 0.22
+
+    if not STAR_RENDER_DEBUG_BODY_ONLY then
+        rimNode, rimBbs, rimMat = CreateStarBillboard(
+            node, "StarRimGlow", STAR_TEXTURES.corona,
+            rimBaseScale,
+            1.0, 0.35, 0.14, rimBaseAlpha  -- #FF5A24 偏红橙
+        )
+    end
+
+    -- ========== Layer 3: 日冕（条件创建） ==========
     local coronaNode = nil
     local coronaBbs = nil
     local coronaMat = nil
-    local coronaBaseScale = 1.18
-    local coronaBaseAlpha = 0.08
+    local coronaBaseScale = 1.12
+    local coronaBaseAlpha = 0.07
 
     if (not STAR_RENDER_DEBUG_BODY_ONLY) and STAR_ENABLE_CORONA then
         coronaNode, coronaBbs, coronaMat = CreateStarBillboard(
             node, "StarCorona", STAR_TEXTURES.corona,
             coronaBaseScale,
-            color[1], color[2] * 0.65, color[3] * 0.45, coronaBaseAlpha
+            color[1], color[2] * 0.18, color[3] * 0.08, coronaBaseAlpha
         )
     end
 
-    -- ========== Layer 3: 耀斑（条件创建） ==========
+    -- ========== Layer 4: 耀斑（条件创建） ==========
     local flareNode = nil
     local flareBbs = nil
     local flareMat = nil
@@ -236,6 +251,10 @@ local function BuildStar(parentNode, color, size, name)
     starLayers_ = {
         body = bodyNode,
         bodyMat = bodyModel:GetMaterial(0),
+        rim = rimNode,
+        rimBbs = rimBbs,
+        rimMat = rimMat,
+        rimBaseAlpha = rimBaseAlpha,
         corona = coronaNode,
         coronaBbs = coronaBbs,
         coronaMat = coronaMat,
@@ -487,20 +506,28 @@ function StarSystem.Update(dt, elapsedTime)
         -- 下面才允许正式版本的 emissive / corona / flare
         local color = starLayers_.baseColor
 
-        -- 深红橙自发光脉冲：围绕 (0.65, 0.14, 0.04) 做 ±5% 微弱呼吸
+        -- 深红自发光脉冲：围绕 (0.58, 0.10, 0.025) 做 ±5% 微弱呼吸
         local emPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.04
             + math.sin(elapsedTime * 0.83) * 0.02
         starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
-            0.65 * emPulse,  -- R: ~0.61-0.69
-            0.14 * emPulse,  -- G: ~0.13-0.15
-            0.04 * emPulse   -- B: ~0.038-0.042
+            0.58 * emPulse,  -- R: ~0.55-0.61
+            0.10 * emPulse,  -- G: ~0.094-0.106
+            0.025 * emPulse  -- B: ~0.024-0.026
         )))
+
+        -- RimGlow 边缘环呼吸（nil-safe）
+        if starLayers_.rim and starLayers_.rimMat then
+            local rimAlpha = starLayers_.rimBaseAlpha + math.sin(elapsedTime * 0.5) * 0.03
+            starLayers_.rimMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
+                1.0, 0.35, 0.14, rimAlpha
+            )))
+        end
 
         -- 日冕透明度呼吸（nil-safe）
         if starLayers_.corona and starLayers_.coronaMat then
-            local coronaAlpha = starLayers_.coronaBaseAlpha + math.sin(elapsedTime * 0.3) * 0.015
+            local coronaAlpha = starLayers_.coronaBaseAlpha + math.sin(elapsedTime * 0.3) * 0.012
             starLayers_.coronaMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
-                color[1], color[2] * 0.65, color[3] * 0.45, coronaAlpha
+                color[1], color[2] * 0.18, color[3] * 0.08, coronaAlpha
             )))
         end
 
