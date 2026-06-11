@@ -96,36 +96,37 @@ local STAR_TEXTURES = {
     mask     = "image/恒星贴图/star_mask_red_giant.png",
 }
 
+-- ========== 调试开关（Phase 1: 仅本体） ==========
+local STAR_RENDER_DEBUG_BODY_ONLY = true   -- true=只渲染恒星本体，关闭所有外层
+local STAR_ENABLE_CORONA = false           -- 是否启用日冕层
+local STAR_ENABLE_FLARE  = false           -- 是否启用耀斑层
+
 -- 恒星各层节点引用（用于动态更新）
 local starLayers_ = nil
 
 ------------------------------------------------------------
--- 创建恒星本体材质（PBR + 自发光 + 法线）
+-- 创建恒星本体材质
+-- 🔴 调试模式：最简 Diff.xml，无 emissive，纯贴图验证
 ------------------------------------------------------------
 local function CreateStarBodyMaterial(color)
     local mat = Material:new()
-    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/PBR/PBRDiffNormal.xml"))
+    -- 最简 Technique：仅漫反射贴图，无 PBR、无光照复杂度
+    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/Diff.xml"))
 
-    -- Surface 贴图作为基础颜色
+    -- Surface 贴图
     local surfaceTex = cache:GetResource("Texture2D", STAR_TEXTURES.surface)
     if surfaceTex then
         mat:SetTexture(TU_DIFFUSE, surfaceTex)
+        print("[StarSystem] DEBUG: star surface texture LOADED OK: " .. STAR_TEXTURES.surface)
+        print("[StarSystem] DEBUG: texture size = " .. surfaceTex:GetWidth() .. "x" .. surfaceTex:GetHeight())
+    else
+        print("[StarSystem] ERROR: FAILED to load star surface texture: " .. STAR_TEXTURES.surface)
     end
 
-    -- 法线贴图
-    local normalTex = cache:GetResource("Texture2D", STAR_TEXTURES.normal)
-    if normalTex then
-        mat:SetTexture(TU_NORMAL, normalTex)
-    end
-
-    -- 颜色 tint（保持贴图细节的同时带入恒星色调）
-    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(color[1], color[2], color[3], 1.0)))
-    -- 自发光（强度 3.0，确保表面纹理可见，不做纯白灯泡）
-    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
-        color[1] * 3.0, color[2] * 3.0, color[3] * 3.0
-    )))
-    mat:SetShaderParameter("Roughness", Variant(1.0))
-    mat:SetShaderParameter("Metallic", Variant(0.0))
+    -- 白色 DiffColor = 不染色，纯看贴图原色
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 1.0, 1.0, 1.0)))
+    -- 无自发光
+    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.0, 0.0, 0.0)))
 
     return mat
 end
@@ -140,74 +141,101 @@ local function CreateAdditiveLayerMaterial(texturePath, r, g, b, alpha)
     local tex = cache:GetResource("Texture2D", texturePath)
     if tex then
         mat:SetTexture(TU_DIFFUSE, tex)
+    else
+        print("[StarSystem] WARNING: missing additive texture: " .. texturePath)
     end
 
     mat:SetShaderParameter("MatDiffColor", Variant(Vector4(r, g, b, alpha)))
-    -- 关闭深度写入，避免透明区域（黑色）遮挡后方物体导致方形边缘
     mat.depthWrite = false
 
     return mat
 end
 
 ------------------------------------------------------------
--- 创建恒星（多层渲染系统）
+-- 辅助：创建恒星外层 Billboard（日冕/耀斑统一入口）
+------------------------------------------------------------
+local function CreateStarBillboard(parentNode, name, texturePath, size, r, g, b, alpha)
+    local node = parentNode:CreateChild(name)
+    local bbs = node:CreateComponent("BillboardSet")
+    bbs:SetNumBillboards(1)
+    bbs:SetFaceCameraMode(FC_ROTATE_XYZ)
+
+    local mat = CreateAdditiveLayerMaterial(texturePath, r, g, b, alpha)
+    bbs:SetMaterial(mat)
+
+    local bb = bbs:GetBillboard(0)
+    bb.size = Vector2(size, size)
+    bb.position = Vector3(0, 0, 0)
+    bb.enabled = true
+    bbs:Commit()
+
+    return node, bbs, mat
+end
+
+------------------------------------------------------------
+-- 创建恒星（多层渲染系统，通过开关控制各层级）
 ------------------------------------------------------------
 local function BuildStar(parentNode, color, size, name)
     local node = parentNode:CreateChild(name or "Star")
     node:SetScale(Vector3(size, size, size))
 
-    -- ========== Layer 1: 恒星本体 ==========
+    -- ========== Layer 1: 恒星本体（始终创建） ==========
     local bodyNode = node:CreateChild("StarBody")
     local bodyModel = bodyNode:CreateComponent("StaticModel")
     bodyModel:SetModel(cache:GetResource("Model", "Models/Sphere.mdl"))
     bodyModel:SetMaterial(CreateStarBodyMaterial(color))
 
-    -- ========== Layer 2: 日冕层（加性混合球壳，depthWrite=off） ==========
-    local coronaNode = node:CreateChild("StarCorona")
-    local coronaScale = 2.0  -- 相对于恒星本体
-    coronaNode:SetScale(Vector3(coronaScale, coronaScale, coronaScale))
-    local coronaModel = coronaNode:CreateComponent("StaticModel")
-    coronaModel:SetModel(cache:GetResource("Model", "Models/Sphere.mdl"))
-    coronaModel:SetMaterial(CreateAdditiveLayerMaterial(
-        STAR_TEXTURES.corona,
-        color[1], color[2], color[3], 0.32
-    ))
+    -- ========== Layer 2: 日冕（条件创建） ==========
+    local coronaNode = nil
+    local coronaBbs = nil
+    local coronaMat = nil
+    local coronaBaseScale = 1.35
+    local coronaBaseAlpha = 0.12
 
-    -- ========== Layer 3: 耀斑层（Billboard 面向相机，depthWrite=off） ==========
-    local flareNode = node:CreateChild("StarFlare")
-    local flareBbs = flareNode:CreateComponent("BillboardSet")
-    flareBbs:SetNumBillboards(1)
-    flareBbs:SetFaceCameraMode(FC_ROTATE_XYZ)
-    flareBbs:SetMaterial(CreateAdditiveLayerMaterial(
-        STAR_TEXTURES.flare,
-        color[1] * 1.2, color[2] * 0.9, color[3] * 0.8, 0.18
-    ))
-    local flare = flareBbs:GetBillboard(0)
-    local flareSize = 1.4  -- 相对于恒星尺寸
-    flare.size = Vector2(flareSize, flareSize)
-    flare.position = Vector3(0, 0, 0)
-    flare.enabled = true
-    flareBbs:Commit()
+    if (not STAR_RENDER_DEBUG_BODY_ONLY) and STAR_ENABLE_CORONA then
+        coronaNode, coronaBbs, coronaMat = CreateStarBillboard(
+            node, "StarCorona", STAR_TEXTURES.corona,
+            coronaBaseScale,
+            color[1], color[2] * 0.65, color[3] * 0.45, coronaBaseAlpha
+        )
+    end
 
-    -- ========== 恒星光源 ==========
+    -- ========== Layer 3: 耀斑（条件创建） ==========
+    local flareNode = nil
+    local flareBbs = nil
+    local flareMat = nil
+    local flareBaseAlpha = 0.04
+
+    if (not STAR_RENDER_DEBUG_BODY_ONLY) and STAR_ENABLE_FLARE then
+        flareNode, flareBbs, flareMat = CreateStarBillboard(
+            node, "StarFlare", STAR_TEXTURES.flare,
+            1.1,
+            color[1] * 1.2, color[2] * 0.75, color[3] * 0.55, flareBaseAlpha
+        )
+    end
+
+    -- ========== 恒星光源（调试模式：极低亮度，避免冲白本体） ==========
     local lightNode = node:CreateChild("StarLight")
     local light = lightNode:CreateComponent("Light")
     light.lightType = LIGHT_POINT
     light.range = 400.0
-    light.brightness = 2.2
+    light.brightness = 0.3  -- 调试用极低值
     light.color = Color(color[1], color[2], color[3])
-    light.castShadows = true
+    light.castShadows = false
 
     -- 保存各层引用用于动态更新
     starLayers_ = {
         body = bodyNode,
         bodyMat = bodyModel:GetMaterial(0),
         corona = coronaNode,
-        coronaMat = coronaModel:GetMaterial(0),
-        coronaBaseScale = coronaScale,
+        coronaBbs = coronaBbs,
+        coronaMat = coronaMat,
+        coronaBaseScale = coronaBaseScale,
+        coronaBaseAlpha = coronaBaseAlpha,
         flare = flareNode,
         flareBbs = flareBbs,
-        flareBaseAlpha = 0.18,
+        flareMat = flareMat,
+        flareBaseAlpha = flareBaseAlpha,
         baseColor = color,
     }
 
@@ -436,41 +464,37 @@ function StarSystem.Update(dt, elapsedTime)
         local color = starLayers_.baseColor
 
         -- 1. 恒星本体轻微缩放脉动
-        local bodyPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.008
+        local bodyPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.004
         starNode_:SetScale(Vector3(baseSize * bodyPulse, baseSize * bodyPulse, baseSize * bodyPulse))
 
         -- 2. 表面 UV 流动（通过旋转本体模拟）
-        local bodyRotY = elapsedTime * 2.0    -- 缓慢自转（度/秒）
-        local bodyRotX = elapsedTime * 0.8    -- 轻微俯仰变化
-        starLayers_.body:SetRotation(Quaternion(bodyRotY, Vector3.UP) * Quaternion(bodyRotX, Vector3.RIGHT))
+        local bodyRotY = elapsedTime * 1.2
+        local bodyRotX = elapsedTime * 0.35
+        starLayers_.body:SetRotation(
+            Quaternion(bodyRotY, Vector3.UP) *
+            Quaternion(bodyRotX, Vector3.RIGHT)
+        )
 
-        -- 3. 自发光脉冲（emissive 强度围绕 3.0 轻微变化）
-        local emPulse = 3.0 + math.sin(elapsedTime * 0.35) * 0.25
-            + math.sin(elapsedTime * 0.83) * 0.12
+        -- 3. 自发光脉冲（emissive 强度围绕 0.85 轻微变化）
+        local emPulse = 0.85 + math.sin(elapsedTime * 0.35) * 0.06
+            + math.sin(elapsedTime * 0.83) * 0.03
         starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
             color[1] * emPulse, color[2] * emPulse, color[3] * emPulse
         )))
 
-        -- 4. 日冕呼吸（缩放 + 透明度轻微变化）
-        local coronaBreath = starLayers_.coronaBaseScale
-            + math.sin(elapsedTime * 0.25) * 0.04
-            + math.sin(elapsedTime * 0.61) * 0.02
-        starLayers_.corona:SetScale(Vector3(coronaBreath, coronaBreath, coronaBreath))
-        -- 日冕缓慢旋转
-        starLayers_.corona:SetRotation(Quaternion(elapsedTime * 0.7, Vector3.UP))
-        local coronaAlpha = 0.32 + math.sin(elapsedTime * 0.3) * 0.03
-        starLayers_.coronaMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
-            color[1], color[2], color[3], coronaAlpha
-        )))
+        -- 4. 日冕透明度呼吸（nil-safe）
+        if starLayers_.corona and starLayers_.coronaMat then
+            local coronaAlpha = starLayers_.coronaBaseAlpha + math.sin(elapsedTime * 0.3) * 0.015
+            starLayers_.coronaMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
+                color[1], color[2] * 0.65, color[3] * 0.45, coronaAlpha
+            )))
+        end
 
-        -- 5. Flare 透明度微变
-        local flareAlpha = starLayers_.flareBaseAlpha
-            + math.sin(elapsedTime * 0.45) * 0.02
-            + math.sin(elapsedTime * 1.1) * 0.015
-        local flareMat = starLayers_.flareBbs:GetMaterial()
-        if flareMat then
-            flareMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
-                color[1] * 1.2, color[2] * 0.9, color[3] * 0.8, flareAlpha
+        -- 5. 耀斑透明度微变（nil-safe）
+        if starLayers_.flareBbs and starLayers_.flareMat then
+            local flareAlpha = starLayers_.flareBaseAlpha + math.sin(elapsedTime * 0.45) * 0.01
+            starLayers_.flareMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
+                color[1] * 1.2, color[2] * 0.75, color[3] * 0.55, flareAlpha
             )))
         end
     elseif starNode_ then

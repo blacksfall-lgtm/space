@@ -192,15 +192,15 @@ function CreateScene()
         zone.fogEnd = 10000
     end
     
-    -- 调低方向光亮度(太空背景暗)
+    -- 调低方向光亮度(调试模式：极低，纯验证贴图)
     local light = lightGroup:GetComponent("Light", true)
     if light then
-        light.brightness = 1.5
-        light.color = Color(0.8, 0.85, 1.0)
+        light.brightness = 0.5
+        light.color = Color(1.0, 1.0, 1.0)
     end
     
-    -- HDR渲染
-    renderer.hdrRendering = true
+    -- HDR渲染（调试贴图时关闭，避免过曝冲白）
+    renderer.hdrRendering = false
     
     -- 创建星系根节点(用于切换星系时清除)
     -- 下移到飞船下方, 恒星/行星在飞船脚下(类似群星Stellaris视角)
