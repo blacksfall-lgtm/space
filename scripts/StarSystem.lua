@@ -195,30 +195,35 @@ local function BuildStar(parentNode, color, size, name)
     bodyModel:SetMaterial(CreateStarBodyMaterial(color))
     bodyModel.castShadows = false
 
-    -- ========== Layer 2: 多层发光描边球壳（参考蓝巨星边缘渐变效果） ==========
-    -- 3层叠加：紧边高亮 → 中层柔光 → 外层淡晕
-    local glowShells = {}  -- { {node, mat, baseAlpha}, ... }
+    -- ========== Layer 2: 多层发光描边环（Torus 几何体） ==========
+    -- 用 Torus（环形体）代替 Sphere（球壳），从俯视角度天然只显示边缘环
+    -- Torus BBox: 1.2776 × 0.2555 × 1.2776
+    -- Major radius R=0.511, minor radius r=0.1278
+    -- 当 XZ scale ≈ 0.98 时，环中心半径 ≈ 0.5 = 星体边缘
+    -- 星体本身的深度写入会自然遮挡环的内侧部分
+    local glowShells = {}  -- { {node, mat, baseAlpha, color}, ... }
 
-    local GLOW_SHELL_LAYERS = {
-        -- Layer A: 紧贴边缘的亮白热环（最亮，最紧）
-        { scale = 1.008, alpha = 0.32, color = {1.0, 0.72, 0.45} },
-        -- Layer B: 中层红橙柔光
-        { scale = 1.025, alpha = 0.18, color = {1.0, 0.48, 0.14} },
-        -- Layer C: 外层深红淡晕（最大，最淡）
-        { scale = 1.055, alpha = 0.07, color = {1.0, 0.30, 0.08} },
+    local GLOW_RING_LAYERS = {
+        -- Layer A: 紧贴边缘的亮热环（中心环 ≈ 星体边缘）
+        { scaleXZ = 0.98, scaleY = 0.35, alpha = 0.38, color = {1.0, 0.72, 0.45} },
+        -- Layer B: 中层红橙柔光（稍外扩）
+        { scaleXZ = 1.10, scaleY = 0.45, alpha = 0.22, color = {1.0, 0.48, 0.14} },
+        -- Layer C: 外层深红淡晕（最大最淡）
+        { scaleXZ = 1.25, scaleY = 0.55, alpha = 0.10, color = {1.0, 0.30, 0.08} },
     }
 
     if not STAR_RENDER_DEBUG_BODY_ONLY then
         local addTech = cache:GetResource("Technique", "Techniques/DiffAddAlpha.xml")
-        local sphereMdl = cache:GetResource("Model", "Models/Sphere.mdl")
+        local torusMdl = cache:GetResource("Model", "Models/Torus.mdl")
 
-        for i, layer in ipairs(GLOW_SHELL_LAYERS) do
-            local shellNode = node:CreateChild("StarGlowShell_" .. i)
-            shellNode:SetScale(Vector3(layer.scale, layer.scale, layer.scale))
+        for i, layer in ipairs(GLOW_RING_LAYERS) do
+            local ringNode = node:CreateChild("StarGlowRing_" .. i)
+            -- XZ 控制环半径，Y 控制环管厚度（压扁使发光更薄锐）
+            ringNode:SetScale(Vector3(layer.scaleXZ, layer.scaleY, layer.scaleXZ))
 
-            local shellModel = shellNode:CreateComponent("StaticModel")
-            shellModel:SetModel(sphereMdl)
-            shellModel.castShadows = false
+            local ringModel = ringNode:CreateComponent("StaticModel")
+            ringModel:SetModel(torusMdl)
+            ringModel.castShadows = false
 
             local mat = Material:new()
             if addTech then
@@ -227,9 +232,10 @@ local function BuildStar(parentNode, color, size, name)
             mat:SetShaderParameter("MatDiffColor", Variant(Vector4(
                 layer.color[1], layer.color[2], layer.color[3], layer.alpha
             )))
-            shellModel:SetMaterial(mat)
+            mat.depthWrite = false  -- 不写深度，但仍受星体深度遮挡
+            ringModel:SetMaterial(mat)
 
-            glowShells[i] = { node = shellNode, mat = mat, baseAlpha = layer.alpha, color = layer.color }
+            glowShells[i] = { node = ringNode, mat = mat, baseAlpha = layer.alpha, color = layer.color }
         end
     end
 
