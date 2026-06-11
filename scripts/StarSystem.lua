@@ -195,31 +195,42 @@ local function BuildStar(parentNode, color, size, name)
     bodyModel:SetMaterial(CreateStarBodyMaterial(color))
     bodyModel.castShadows = false
 
-    -- ========== Layer 2: 发光描边球壳 GlowShell（3D包裹式边缘发光） ==========
-    local glowShellNode = nil
-    local glowShellMat = nil
-    local glowShellBaseAlpha = 0.18
-    local glowShellScale = 1.025  -- 比本体大2.5%，形成薄壳描边
+    -- ========== Layer 2: 多层发光描边球壳（参考蓝巨星边缘渐变效果） ==========
+    -- 3层叠加：紧边高亮 → 中层柔光 → 外层淡晕
+    local glowShells = {}  -- { {node, mat, baseAlpha}, ... }
+
+    local GLOW_SHELL_LAYERS = {
+        -- Layer A: 紧贴边缘的亮白热环（最亮，最紧）
+        { scale = 1.008, alpha = 0.32, color = {1.0, 0.72, 0.45} },
+        -- Layer B: 中层红橙柔光
+        { scale = 1.025, alpha = 0.18, color = {1.0, 0.48, 0.14} },
+        -- Layer C: 外层深红淡晕（最大，最淡）
+        { scale = 1.055, alpha = 0.07, color = {1.0, 0.30, 0.08} },
+    }
 
     if not STAR_RENDER_DEBUG_BODY_ONLY then
-        glowShellNode = node:CreateChild("StarGlowShell")
-        glowShellNode:SetScale(Vector3(glowShellScale, glowShellScale, glowShellScale))
-
-        local shellModel = glowShellNode:CreateComponent("StaticModel")
-        shellModel:SetModel(cache:GetResource("Model", "Models/Sphere.mdl"))
-        shellModel.castShadows = false
-
-        -- Additive 混合材质：纯色红橙 + 低透明度
-        glowShellMat = Material:new()
         local addTech = cache:GetResource("Technique", "Techniques/DiffAddAlpha.xml")
-        if addTech then
-            glowShellMat:SetTechnique(0, addTech)
+        local sphereMdl = cache:GetResource("Model", "Models/Sphere.mdl")
+
+        for i, layer in ipairs(GLOW_SHELL_LAYERS) do
+            local shellNode = node:CreateChild("StarGlowShell_" .. i)
+            shellNode:SetScale(Vector3(layer.scale, layer.scale, layer.scale))
+
+            local shellModel = shellNode:CreateComponent("StaticModel")
+            shellModel:SetModel(sphereMdl)
+            shellModel.castShadows = false
+
+            local mat = Material:new()
+            if addTech then
+                mat:SetTechnique(0, addTech)
+            end
+            mat:SetShaderParameter("MatDiffColor", Variant(Vector4(
+                layer.color[1], layer.color[2], layer.color[3], layer.alpha
+            )))
+            shellModel:SetMaterial(mat)
+
+            glowShells[i] = { node = shellNode, mat = mat, baseAlpha = layer.alpha, color = layer.color }
         end
-        -- #FF7A24 红橙描边色，Alpha 控制发光强度
-        glowShellMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
-            1.0, 0.48, 0.14, glowShellBaseAlpha
-        )))
-        shellModel:SetMaterial(glowShellMat)
     end
 
     -- ========== Layer 3: 日冕（条件创建） ==========
@@ -266,9 +277,7 @@ local function BuildStar(parentNode, color, size, name)
     starLayers_ = {
         body = bodyNode,
         bodyMat = bodyModel:GetMaterial(0),
-        glowShell = glowShellNode,
-        glowShellMat = glowShellMat,
-        glowShellBaseAlpha = glowShellBaseAlpha,
+        glowShells = glowShells,  -- 多层发光球壳数组
         corona = coronaNode,
         coronaBbs = coronaBbs,
         coronaMat = coronaMat,
@@ -529,14 +538,20 @@ function StarSystem.Update(dt, elapsedTime)
             0.016 * emPulse  -- B: ~0.015-0.017
         )))
 
-        -- GlowShell 发光描边呼吸（nil-safe）
-        if starLayers_.glowShell and starLayers_.glowShellMat then
-            local shellAlpha = starLayers_.glowShellBaseAlpha
-                + math.sin(elapsedTime * 0.6) * 0.03
-                + math.sin(elapsedTime * 1.1) * 0.015
-            starLayers_.glowShellMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
-                1.0, 0.48, 0.14, shellAlpha  -- #FF7A24 描边呼吸
-            )))
+        -- 多层 GlowShell 发光描边呼吸（nil-safe）
+        if starLayers_.glowShells then
+            for i, shell in ipairs(starLayers_.glowShells) do
+                if shell.mat then
+                    -- 每层用不同频率呼吸，避免同步感
+                    local freq = 0.4 + i * 0.25
+                    local shellAlpha = shell.baseAlpha
+                        + math.sin(elapsedTime * freq) * (shell.baseAlpha * 0.15)
+                        + math.sin(elapsedTime * freq * 2.3) * (shell.baseAlpha * 0.08)
+                    shell.mat:SetShaderParameter("MatDiffColor", Variant(Vector4(
+                        shell.color[1], shell.color[2], shell.color[3], shellAlpha
+                    )))
+                end
+            end
         end
 
         -- 日冕透明度呼吸（nil-safe）
