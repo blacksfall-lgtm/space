@@ -195,47 +195,58 @@ local function BuildStar(parentNode, color, size, name)
     bodyModel:SetMaterial(CreateStarBodyMaterial(color))
     bodyModel.castShadows = false
 
-    -- ========== Layer 2: 多层发光描边环（Torus 几何体） ==========
-    -- 用 Torus（环形体）代替 Sphere（球壳），从俯视角度天然只显示边缘环
-    -- Torus BBox: 1.2776 × 0.2555 × 1.2776
-    -- Major radius R=0.511, minor radius r=0.1278
-    -- 当 XZ scale ≈ 0.98 时，环中心半径 ≈ 0.5 = 星体边缘
-    -- 星体本身的深度写入会自然遮挡环的内侧部分
-    local glowShells = {}  -- { {node, mat, baseAlpha, color}, ... }
+    -- ========== Layer 2: 多层发光描边（Billboard + 环形渐变纹理） ==========
+    -- 使用程序化生成的环形发光贴图(star_ring_glow.png)：中心黑色 + 边缘柔和光环
+    -- 通过加法混合叠加在星体上，中心透黑不影响星体表面，只有边缘发光
+    local glowShells = {}  -- { {node, bbs, mat, baseAlpha, baseScale, color}, ... }
 
     local GLOW_RING_LAYERS = {
-        -- Layer A: 紧贴边缘的亮热环（中心环 ≈ 星体边缘）
-        { scaleXZ = 0.98, scaleY = 0.35, alpha = 0.38, color = {1.0, 0.72, 0.45} },
-        -- Layer B: 中层红橙柔光（稍外扩）
-        { scaleXZ = 1.10, scaleY = 0.45, alpha = 0.22, color = {1.0, 0.48, 0.14} },
-        -- Layer C: 外层深红淡晕（最大最淡）
-        { scaleXZ = 1.25, scaleY = 0.55, alpha = 0.10, color = {1.0, 0.30, 0.08} },
+        -- Layer A: 紧贴边缘的亮热环（Billboard 尺寸略大于星体直径）
+        { scale = 1.12, alpha = 0.45, color = {1.0, 0.75, 0.45} },
+        -- Layer B: 中层红橙柔光
+        { scale = 1.22, alpha = 0.28, color = {1.0, 0.50, 0.18} },
+        -- Layer C: 外层深红淡晕
+        { scale = 1.35, alpha = 0.12, color = {1.0, 0.32, 0.10} },
     }
 
     if not STAR_RENDER_DEBUG_BODY_ONLY then
-        local addTech = cache:GetResource("Technique", "Techniques/DiffAddAlpha.xml")
-        local torusMdl = cache:GetResource("Model", "Models/Torus.mdl")
+        local ringTex = cache:GetResource("Texture2D", "image/恒星贴图/star_ring_glow.png")
+        if ringTex then
+            ringTex.filterMode = FILTER_BILINEAR
+        end
 
         for i, layer in ipairs(GLOW_RING_LAYERS) do
             local ringNode = node:CreateChild("StarGlowRing_" .. i)
-            -- XZ 控制环半径，Y 控制环管厚度（压扁使发光更薄锐）
-            ringNode:SetScale(Vector3(layer.scaleXZ, layer.scaleY, layer.scaleXZ))
+            local bbs = ringNode:CreateComponent("BillboardSet")
+            bbs:SetNumBillboards(1)
+            bbs:SetFaceCameraMode(FC_ROTATE_XYZ)
 
-            local ringModel = ringNode:CreateComponent("StaticModel")
-            ringModel:SetModel(torusMdl)
-            ringModel.castShadows = false
-
+            -- 加法混合材质 + 环形纹理
             local mat = Material:new()
+            local addTech = cache:GetResource("Technique", "Techniques/DiffAddAlpha.xml")
             if addTech then
                 mat:SetTechnique(0, addTech)
+            end
+            if ringTex then
+                mat:SetTexture(TU_DIFFUSE, ringTex)
             end
             mat:SetShaderParameter("MatDiffColor", Variant(Vector4(
                 layer.color[1], layer.color[2], layer.color[3], layer.alpha
             )))
-            mat.depthWrite = false  -- 不写深度，但仍受星体深度遮挡
-            ringModel:SetMaterial(mat)
+            mat.depthWrite = false
+            bbs:SetMaterial(mat)
 
-            glowShells[i] = { node = ringNode, mat = mat, baseAlpha = layer.alpha, color = layer.color }
+            local bb = bbs:GetBillboard(0)
+            bb.size = Vector2(layer.scale, layer.scale)
+            bb.position = Vector3(0, 0, 0)
+            bb.enabled = true
+            bbs:Commit()
+
+            glowShells[i] = {
+                node = ringNode, bbs = bbs, mat = mat,
+                baseAlpha = layer.alpha, baseScale = layer.scale,
+                color = layer.color
+            }
         end
     end
 
@@ -544,18 +555,25 @@ function StarSystem.Update(dt, elapsedTime)
             0.016 * emPulse  -- B: ~0.015-0.017
         )))
 
-        -- 多层 GlowShell 发光描边呼吸（nil-safe）
+        -- 多层发光环呼吸（Billboard 透明度 + 尺寸微变）
         if starLayers_.glowShells then
             for i, shell in ipairs(starLayers_.glowShells) do
-                if shell.mat then
+                if shell.mat and shell.bbs then
                     -- 每层用不同频率呼吸，避免同步感
                     local freq = 0.4 + i * 0.25
                     local shellAlpha = shell.baseAlpha
-                        + math.sin(elapsedTime * freq) * (shell.baseAlpha * 0.15)
-                        + math.sin(elapsedTime * freq * 2.3) * (shell.baseAlpha * 0.08)
+                        + math.sin(elapsedTime * freq) * (shell.baseAlpha * 0.12)
+                        + math.sin(elapsedTime * freq * 2.3) * (shell.baseAlpha * 0.06)
                     shell.mat:SetShaderParameter("MatDiffColor", Variant(Vector4(
                         shell.color[1], shell.color[2], shell.color[3], shellAlpha
                     )))
+                    -- 尺寸微弱呼吸（±2%）
+                    local scalePulse = shell.baseScale * (1.0 + math.sin(elapsedTime * freq * 0.7) * 0.02)
+                    local bb = shell.bbs:GetBillboard(0)
+                    if bb then
+                        bb.size = Vector2(scalePulse, scalePulse)
+                        shell.bbs:Commit()
+                    end
                 end
             end
         end
