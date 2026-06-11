@@ -134,8 +134,8 @@ local function CreateStarBodyMaterial(color)
     -- DiffColor 深红：压低绿通道，保留纹理暗红层次
     mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.38, 0.26, 1.0)))
 
-    -- 极低自发光：仅暗面隐约可见，不覆盖表面纹理
-    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.46, 0.065, 0.016)))
+    -- 高自发光：驱动 HDR Bloom 产生自然边缘辉光溢出
+    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(2.5, 0.6, 0.15)))
 
     return mat
 end
@@ -201,27 +201,28 @@ local function BuildStar(parentNode, color, size, name)
     local glowShells = {}  -- { {node, model, mat, baseScale, baseAlpha, color, rotAxis, rotSpeed}, ... }
 
     local GLOW_SPHERE_LAYERS = {
+        -- 大幅降低透明度：Bloom 负责主要辉光，球壳只做流动层次辅助
         -- Layer A: 中层等离子（暖橙色，紧贴星体）
         {
-            scale = 1.12, alpha = 0.30,
+            scale = 1.08, alpha = 0.08,
             color = {1.0, 0.55, 0.15},
-            emissive = {1.5, 0.6, 0.1},
+            emissive = {3.0, 1.2, 0.2},   -- 高emissive 驱动额外 bloom
             rotAxis = Vector3(0.4, 1.0, 0.2):Normalized(),
             rotSpeed = 10,
         },
         -- Layer B: 外层等离子（深红，略大）
         {
-            scale = 1.25, alpha = 0.15,
+            scale = 1.18, alpha = 0.05,
             color = {0.9, 0.3, 0.08},
-            emissive = {0.8, 0.25, 0.05},
+            emissive = {2.0, 0.5, 0.1},
             rotAxis = Vector3(0.2, 0.8, 0.5):Normalized(),
             rotSpeed = -6,
         },
-        -- Layer C: 最外晕（淡红，最大最透）
+        -- Layer C: 最外晕（淡红，最大最透，几乎不可见，只增加 bloom 范围）
         {
-            scale = 1.40, alpha = 0.07,
+            scale = 1.32, alpha = 0.03,
             color = {0.8, 0.2, 0.05},
-            emissive = {0.4, 0.1, 0.02},
+            emissive = {1.0, 0.25, 0.05},
             rotAxis = Vector3(-0.3, 1.0, -0.4):Normalized(),
             rotSpeed = 4,
         },
@@ -555,13 +556,13 @@ function StarSystem.Update(dt, elapsedTime)
         -- 下面才允许正式版本的 emissive / corona / flare
         local color = starLayers_.baseColor
 
-        -- 深红自发光脉冲：围绕 (0.46, 0.065, 0.016) 做 ±5% 微弱呼吸
+        -- 高自发光脉冲：围绕 (2.5, 0.6, 0.15) 做 ±5% 微弱呼吸（驱动 Bloom）
         local emPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.04
             + math.sin(elapsedTime * 0.83) * 0.02
         starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
-            0.46 * emPulse,  -- R: ~0.43-0.49
-            0.065 * emPulse, -- G: ~0.061-0.069
-            0.016 * emPulse  -- B: ~0.015-0.017
+            2.5 * emPulse,
+            0.6 * emPulse,
+            0.15 * emPulse
         )))
 
         -- 多层发光球壳：差速旋转 + 呼吸脉动

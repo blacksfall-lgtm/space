@@ -199,8 +199,15 @@ function CreateScene()
         light.color = Color(1.0, 1.0, 1.0)
     end
     
-    -- HDR渲染（调试贴图时关闭，避免过曝冲白）
-    renderer.hdrRendering = false
+    -- HDR + Bloom：恒星高自发光通过 Bloom 溢出产生自然边缘辉光
+    renderer.hdrRendering = true
+    if zone then
+        zone.bloomPlusEnabled = true
+        zone.bloomThreshold = 0.8       -- 亮度超过此值开始泛光
+        zone.bloomWeight = 0.6          -- 泛光混合权重
+        zone.bloomPlusIntensity = 1.2   -- 泛光强度
+        zone.autoExposureEnabled = true -- 自动曝光避免过曝
+    end
     
     -- 创建星系根节点(用于切换星系时清除)
     -- 下移到飞船下方, 恒星/行星在飞船脚下(类似群星Stellaris视角)
