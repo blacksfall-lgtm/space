@@ -98,7 +98,7 @@ local STAR_TEXTURES = {
 
 -- ========== Phase 2: 自发光恒星 ==========
 local STAR_RENDER_DEBUG_BODY_ONLY = false  -- Phase 1 已通过，进入正式渲染
-local STAR_ENABLE_CORONA = false           -- 关闭日冕（红色方形板问题，待贴图修正后重开）
+local STAR_ENABLE_CORONA = true            -- 小范围日冕（Scale≤1.25, Alpha≤0.10）
 local STAR_ENABLE_FLARE  = false           -- 耀斑关闭
 
 -- 恒星各层节点引用（用于动态更新）
@@ -128,11 +128,11 @@ local function CreateStarBodyMaterial(color)
         return mat
     end
 
-    -- 微暖DiffColor：保留贴图红色层次，轻微偏暖但不冲淡纹理
-    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.85, 0.75, 1.0)))
+    -- DiffColor 偏红：保留暗红底色和红橙纹理层次
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.55, 0.38, 1.0)))
 
-    -- 低强度偏红橙自发光：暗面不死黑，但绝不冲成纯黄光球
-    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.75, 0.16, 0.04)))
+    -- 低强度深红橙自发光：暗面微亮但不冲淡表面纹理对比
+    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.65, 0.14, 0.04)))
 
     return mat
 end
@@ -196,8 +196,8 @@ local function BuildStar(parentNode, color, size, name)
     local coronaNode = nil
     local coronaBbs = nil
     local coronaMat = nil
-    local coronaBaseScale = 1.35
-    local coronaBaseAlpha = 0.12
+    local coronaBaseScale = 1.18
+    local coronaBaseAlpha = 0.08
 
     if (not STAR_RENDER_DEBUG_BODY_ONLY) and STAR_ENABLE_CORONA then
         coronaNode, coronaBbs, coronaMat = CreateStarBillboard(
@@ -487,12 +487,12 @@ function StarSystem.Update(dt, elapsedTime)
         -- 下面才允许正式版本的 emissive / corona / flare
         local color = starLayers_.baseColor
 
-        -- 低强度偏红橙自发光脉冲：围绕 (0.75, 0.16, 0.04) 做 ±5% 微弱呼吸
+        -- 深红橙自发光脉冲：围绕 (0.65, 0.14, 0.04) 做 ±5% 微弱呼吸
         local emPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.04
             + math.sin(elapsedTime * 0.83) * 0.02
         starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
-            0.75 * emPulse,  -- R: ~0.71-0.79
-            0.16 * emPulse,  -- G: ~0.15-0.17
+            0.65 * emPulse,  -- R: ~0.61-0.69
+            0.14 * emPulse,  -- G: ~0.13-0.15
             0.04 * emPulse   -- B: ~0.038-0.042
         )))
 
