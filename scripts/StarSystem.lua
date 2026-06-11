@@ -106,12 +106,18 @@ local starLayers_ = nil
 
 ------------------------------------------------------------
 -- 创建恒星本体材质
--- 🔴 调试模式：最简 Diff.xml，无 emissive，纯贴图验证
+-- 🔴 调试模式：Unlit.xml（零光照），纯贴图验证
 ------------------------------------------------------------
 local function CreateStarBodyMaterial(color)
     local mat = Material:new()
-    -- 最简 Technique：仅漫反射贴图，无 PBR、无光照复杂度
-    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/Diff.xml"))
+
+    -- 优先 Unlit（完全无光照），fallback 到 Diff
+    local tech = cache:GetResource("Technique", "Techniques/NoTextureUnlit.xml")
+    if not tech then
+        print("[StarSystem] WARNING: Unlit.xml not found, falling back to Diff.xml")
+        tech = cache:GetResource("Technique", "Techniques/Diff.xml")
+    end
+    mat:SetTechnique(0, tech)
 
     -- Surface 贴图
     local surfaceTex = cache:GetResource("Texture2D", STAR_TEXTURES.surface)
@@ -119,13 +125,15 @@ local function CreateStarBodyMaterial(color)
         mat:SetTexture(TU_DIFFUSE, surfaceTex)
         print("[StarSystem] DEBUG: star surface texture LOADED OK: " .. STAR_TEXTURES.surface)
         print("[StarSystem] DEBUG: texture size = " .. surfaceTex:GetWidth() .. "x" .. surfaceTex:GetHeight())
+        -- 🟢 强制绿色测试：确认材质确实应用到了可见球体
+        mat:SetShaderParameter("MatDiffColor", Variant(Vector4(0.0, 1.0, 0.0, 1.0)))
     else
         print("[StarSystem] ERROR: FAILED to load star surface texture: " .. STAR_TEXTURES.surface)
+        -- 洋红色 = 贴图加载失败的醒目错误标识
+        mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.0, 1.0, 1.0)))
     end
 
-    -- 白色 DiffColor = 不染色，纯看贴图原色
-    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 1.0, 1.0, 1.0)))
-    -- 无自发光
+    -- 调试阶段：无自发光
     mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.0, 0.0, 0.0)))
 
     return mat
@@ -214,14 +222,16 @@ local function BuildStar(parentNode, color, size, name)
         )
     end
 
-    -- ========== 恒星光源（调试模式：极低亮度，避免冲白本体） ==========
-    local lightNode = node:CreateChild("StarLight")
-    local light = lightNode:CreateComponent("Light")
-    light.lightType = LIGHT_POINT
-    light.range = 400.0
-    light.brightness = 0.3  -- 调试用极低值
-    light.color = Color(color[1], color[2], color[3])
-    light.castShadows = false
+    -- ========== 恒星光源（调试模式完全不创建） ==========
+    if not STAR_RENDER_DEBUG_BODY_ONLY then
+        local lightNode = node:CreateChild("StarLight")
+        local light = lightNode:CreateComponent("Light")
+        light.lightType = LIGHT_POINT
+        light.range = 400.0
+        light.brightness = 1.4
+        light.color = Color(color[1], color[2], color[3])
+        light.castShadows = true
+    end
 
     -- 保存各层引用用于动态更新
     starLayers_ = {
@@ -461,28 +471,31 @@ function StarSystem.Update(dt, elapsedTime)
     -- 恒星多层动态效果
     if starNode_ and starLayers_ then
         local baseSize = systemData_.starSize * 0.75
+
+        -- 只保留缩放和旋转
+        starNode_:SetScale(Vector3(baseSize, baseSize, baseSize))
+
+        local bodyRotY = elapsedTime * 1.2
+        starLayers_.body:SetRotation(Quaternion(bodyRotY, Vector3.UP))
+
+        -- 调试模式下，强制关闭自发光，保持绿色测试，然后立刻 return
+        if STAR_RENDER_DEBUG_BODY_ONLY then
+            starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.0, 0.0, 0.0)))
+            starLayers_.bodyMat:SetShaderParameter("MatDiffColor", Variant(Vector4(0.0, 1.0, 0.0, 1.0)))
+            return
+        end
+
+        -- 下面才允许正式版本的 emissive / corona / flare
         local color = starLayers_.baseColor
 
-        -- 1. 恒星本体轻微缩放脉动
-        local bodyPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.004
-        starNode_:SetScale(Vector3(baseSize * bodyPulse, baseSize * bodyPulse, baseSize * bodyPulse))
-
-        -- 2. 表面 UV 流动（通过旋转本体模拟）
-        local bodyRotY = elapsedTime * 1.2
-        local bodyRotX = elapsedTime * 0.35
-        starLayers_.body:SetRotation(
-            Quaternion(bodyRotY, Vector3.UP) *
-            Quaternion(bodyRotX, Vector3.RIGHT)
-        )
-
-        -- 3. 自发光脉冲（emissive 强度围绕 0.85 轻微变化）
+        -- 自发光脉冲（emissive 强度围绕 0.85 轻微变化）
         local emPulse = 0.85 + math.sin(elapsedTime * 0.35) * 0.06
             + math.sin(elapsedTime * 0.83) * 0.03
         starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
             color[1] * emPulse, color[2] * emPulse, color[3] * emPulse
         )))
 
-        -- 4. 日冕透明度呼吸（nil-safe）
+        -- 日冕透明度呼吸（nil-safe）
         if starLayers_.corona and starLayers_.coronaMat then
             local coronaAlpha = starLayers_.coronaBaseAlpha + math.sin(elapsedTime * 0.3) * 0.015
             starLayers_.coronaMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
@@ -490,7 +503,7 @@ function StarSystem.Update(dt, elapsedTime)
             )))
         end
 
-        -- 5. 耀斑透明度微变（nil-safe）
+        -- 耀斑透明度微变（nil-safe）
         if starLayers_.flareBbs and starLayers_.flareMat then
             local flareAlpha = starLayers_.flareBaseAlpha + math.sin(elapsedTime * 0.45) * 0.01
             starLayers_.flareMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
