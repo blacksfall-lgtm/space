@@ -120,6 +120,9 @@ local function CreateStarBodyMaterial(color)
 
     local surfaceTex = cache:GetResource("Texture2D", STAR_TEXTURES.surface)
     if surfaceTex then
+        -- 减少 MipMap 模糊，保留表面纹理锐度
+        surfaceTex.filterMode = FILTER_BILINEAR
+        surfaceTex:SetNumLevels(1)  -- 关闭 MipMap，近景更锐
         mat:SetTexture(TU_DIFFUSE, surfaceTex)
         print("[StarSystem] star surface texture loaded: " .. surfaceTex:GetWidth() .. "x" .. surfaceTex:GetHeight())
     else
@@ -128,11 +131,11 @@ local function CreateStarBodyMaterial(color)
         return mat
     end
 
-    -- DiffColor 深红：暗红底色为主，保留纹理层次
-    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.40, 0.28, 1.0)))
+    -- DiffColor 深红：压低绿通道，保留纹理暗红层次
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 0.38, 0.26, 1.0)))
 
-    -- 极低自发光：暗面隐约可见，最大化纹理对比
-    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.48, 0.075, 0.018)))
+    -- 极低自发光：仅暗面隐约可见，不覆盖表面纹理
+    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.46, 0.065, 0.016)))
 
     return mat
 end
@@ -196,7 +199,7 @@ local function BuildStar(parentNode, color, size, name)
     local rimNode = nil
     local rimBbs = nil
     local rimMat = nil
-    local rimBaseScale = 1.012
+    local rimBaseScale = 1.01
     local rimBaseAlpha = 0.28
 
     if not STAR_RENDER_DEBUG_BODY_ONLY then
@@ -211,8 +214,8 @@ local function BuildStar(parentNode, color, size, name)
     local coronaNode = nil
     local coronaBbs = nil
     local coronaMat = nil
-    local coronaBaseScale = 1.05
-    local coronaBaseAlpha = 0.035
+    local coronaBaseScale = 1.035
+    local coronaBaseAlpha = 0.025
 
     if (not STAR_RENDER_DEBUG_BODY_ONLY) and STAR_ENABLE_CORONA then
         coronaNode, coronaBbs, coronaMat = CreateStarBillboard(
@@ -506,13 +509,13 @@ function StarSystem.Update(dt, elapsedTime)
         -- 下面才允许正式版本的 emissive / corona / flare
         local color = starLayers_.baseColor
 
-        -- 深红自发光脉冲：围绕 (0.48, 0.075, 0.018) 做 ±5% 微弱呼吸
+        -- 深红自发光脉冲：围绕 (0.46, 0.065, 0.016) 做 ±5% 微弱呼吸
         local emPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.04
             + math.sin(elapsedTime * 0.83) * 0.02
         starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
-            0.48 * emPulse,  -- R: ~0.45-0.51
-            0.075 * emPulse, -- G: ~0.071-0.079
-            0.018 * emPulse  -- B: ~0.017-0.019
+            0.46 * emPulse,  -- R: ~0.43-0.49
+            0.065 * emPulse, -- G: ~0.061-0.069
+            0.016 * emPulse  -- B: ~0.015-0.017
         )))
 
         -- RimGlow 边缘环呼吸（nil-safe）
