@@ -1,0 +1,512 @@
+------------------------------------------------------------
+-- StarSystem.lua
+-- 星系3D内容生成模块
+-- 负责在3D场景中构建恒星、行星、小行星带等天体
+------------------------------------------------------------
+
+local StarSystem = {}
+
+-- 内部引用
+local rootNode_ = nil
+local scene_ = nil
+local systemData_ = nil
+local planetNodes_ = {}
+local asteroidNodes_ = {}
+local starNode_ = nil
+local secondStarNode_ = nil
+
+------------------------------------------------------------
+-- 辅助：创建 PBR 材质
+------------------------------------------------------------
+local function CreateEmissiveMaterial(r, g, b, intensity)
+    local mat = Material:new()
+    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/PBR/PBRNoTexture.xml"))
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(r, g, b, 1.0)))
+    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(r * intensity, g * intensity, b * intensity)))
+    mat:SetShaderParameter("Roughness", Variant(1.0))
+    mat:SetShaderParameter("Metallic", Variant(0.0))
+    return mat
+end
+
+------------------------------------------------------------
+-- 行星类型 → 贴图映射
+------------------------------------------------------------
+local PLANET_TEXTURE_MAP = {
+    LAVA   = { diffuse = "Textures/Planets/lava_diffuse.png",  normal = "Textures/Planets/lava_normal.png" },
+    ICE    = { diffuse = "Textures/Planets/ice_diffuse.png",   normal = "Textures/Planets/ice_normal.png" },
+    OCEAN  = { diffuse = "Textures/Planets/ice_diffuse.png",   normal = "Textures/Planets/ice_normal.png" },
+    GAS    = { diffuse = "Textures/Planets/gas_giant_diffuse.png", normal = "Textures/Planets/gas_giant_normal.png" },
+    ROCKY  = { diffuse = "Textures/Planets/rocky_diffuse.png", normal = "Textures/Planets/rocky_normal.png" },
+    DESERT = { diffuse = "Textures/Planets/rocky_diffuse.png", normal = "Textures/Planets/rocky_normal.png" },
+}
+
+local function CreatePlanetMaterial(r, g, b, planetType)
+    local mat = Material:new()
+    local texInfo = planetType and PLANET_TEXTURE_MAP[planetType]
+    local diffTex = texInfo and cache:GetResource("Texture2D", texInfo.diffuse)
+    local normTex = texInfo and texInfo.normal and cache:GetResource("Texture2D", texInfo.normal)
+
+    if diffTex and normTex then
+        -- PBR + 漫反射贴图 + 法线贴图
+        mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/PBR/PBRDiffNormal.xml"))
+        mat:SetTexture(TU_DIFFUSE, diffTex)
+        mat:SetTexture(TU_NORMAL, normTex)
+        mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 1.0, 1.0, 1.0)))
+        mat:SetShaderParameter("Roughness", Variant(0.8))
+        mat:SetShaderParameter("Metallic", Variant(0.05))
+    elseif diffTex then
+        -- 仅漫反射贴图
+        mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/Diff.xml"))
+        mat:SetTexture(TU_DIFFUSE, diffTex)
+        mat:SetShaderParameter("MatDiffColor", Variant(Vector4(1.0, 1.0, 1.0, 1.0)))
+    else
+        -- 降级：纯色 PBR
+        mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/PBR/PBRNoTexture.xml"))
+        mat:SetShaderParameter("MatDiffColor", Variant(Vector4(r, g, b, 1.0)))
+        mat:SetShaderParameter("Roughness", Variant(0.7))
+        mat:SetShaderParameter("Metallic", Variant(0.1))
+    end
+    return mat
+end
+
+local function CreateAsteroidMaterial()
+    local mat = Material:new()
+    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/PBR/PBRNoTexture.xml"))
+    -- 灰褐色岩石
+    local r = 0.35 + math.random() * 0.15
+    local g = 0.3 + math.random() * 0.1
+    local b = 0.25 + math.random() * 0.1
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(r, g, b, 1.0)))
+    mat:SetShaderParameter("Roughness", Variant(0.9))
+    mat:SetShaderParameter("Metallic", Variant(0.05))
+    return mat
+end
+
+------------------------------------------------------------
+-- 红巨星贴图路径
+------------------------------------------------------------
+local STAR_TEXTURES = {
+    surface  = "image/恒星贴图/star_surface_red_giant.png",
+    emissive = "image/恒星贴图/star_emissive_red_giant.png",
+    normal   = "image/恒星贴图/star_normal_red_giant.png",
+    noise01  = "image/恒星贴图/star_noise_01.png",
+    noise02  = "image/恒星贴图/star_noise_02.png",
+    corona   = "image/恒星贴图/star_corona_red.png",
+    flare    = "image/恒星贴图/star_flare_red.png",
+    mask     = "image/恒星贴图/star_mask_red_giant.png",
+}
+
+-- 恒星各层节点引用（用于动态更新）
+local starLayers_ = nil
+
+------------------------------------------------------------
+-- 创建恒星本体材质（PBR + 自发光 + 法线）
+------------------------------------------------------------
+local function CreateStarBodyMaterial(color)
+    local mat = Material:new()
+    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/PBR/PBRDiffNormal.xml"))
+
+    -- Surface 贴图作为基础颜色
+    local surfaceTex = cache:GetResource("Texture2D", STAR_TEXTURES.surface)
+    if surfaceTex then
+        mat:SetTexture(TU_DIFFUSE, surfaceTex)
+    end
+
+    -- 法线贴图
+    local normalTex = cache:GetResource("Texture2D", STAR_TEXTURES.normal)
+    if normalTex then
+        mat:SetTexture(TU_NORMAL, normalTex)
+    end
+
+    -- 颜色 tint（保持贴图细节的同时带入恒星色调）
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(color[1], color[2], color[3], 1.0)))
+    -- 自发光（强度 3.0，确保表面纹理可见，不做纯白灯泡）
+    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
+        color[1] * 3.0, color[2] * 3.0, color[3] * 3.0
+    )))
+    mat:SetShaderParameter("Roughness", Variant(1.0))
+    mat:SetShaderParameter("Metallic", Variant(0.0))
+
+    return mat
+end
+
+------------------------------------------------------------
+-- 创建加性混合材质（用于日冕、耀斑等外层）
+------------------------------------------------------------
+local function CreateAdditiveLayerMaterial(texturePath, r, g, b, alpha)
+    local mat = Material:new()
+    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/DiffAddAlpha.xml"))
+
+    local tex = cache:GetResource("Texture2D", texturePath)
+    if tex then
+        mat:SetTexture(TU_DIFFUSE, tex)
+    end
+
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(r, g, b, alpha)))
+    -- 关闭深度写入，避免透明区域（黑色）遮挡后方物体导致方形边缘
+    mat.depthWrite = false
+
+    return mat
+end
+
+------------------------------------------------------------
+-- 创建恒星（多层渲染系统）
+------------------------------------------------------------
+local function BuildStar(parentNode, color, size, name)
+    local node = parentNode:CreateChild(name or "Star")
+    node:SetScale(Vector3(size, size, size))
+
+    -- ========== Layer 1: 恒星本体 ==========
+    local bodyNode = node:CreateChild("StarBody")
+    local bodyModel = bodyNode:CreateComponent("StaticModel")
+    bodyModel:SetModel(cache:GetResource("Model", "Models/Sphere.mdl"))
+    bodyModel:SetMaterial(CreateStarBodyMaterial(color))
+
+    -- ========== Layer 2: 日冕层（加性混合球壳，depthWrite=off） ==========
+    local coronaNode = node:CreateChild("StarCorona")
+    local coronaScale = 2.0  -- 相对于恒星本体
+    coronaNode:SetScale(Vector3(coronaScale, coronaScale, coronaScale))
+    local coronaModel = coronaNode:CreateComponent("StaticModel")
+    coronaModel:SetModel(cache:GetResource("Model", "Models/Sphere.mdl"))
+    coronaModel:SetMaterial(CreateAdditiveLayerMaterial(
+        STAR_TEXTURES.corona,
+        color[1], color[2], color[3], 0.32
+    ))
+
+    -- ========== Layer 3: 耀斑层（Billboard 面向相机，depthWrite=off） ==========
+    local flareNode = node:CreateChild("StarFlare")
+    local flareBbs = flareNode:CreateComponent("BillboardSet")
+    flareBbs:SetNumBillboards(1)
+    flareBbs:SetFaceCameraMode(FC_ROTATE_XYZ)
+    flareBbs:SetMaterial(CreateAdditiveLayerMaterial(
+        STAR_TEXTURES.flare,
+        color[1] * 1.2, color[2] * 0.9, color[3] * 0.8, 0.18
+    ))
+    local flare = flareBbs:GetBillboard(0)
+    local flareSize = 1.4  -- 相对于恒星尺寸
+    flare.size = Vector2(flareSize, flareSize)
+    flare.position = Vector3(0, 0, 0)
+    flare.enabled = true
+    flareBbs:Commit()
+
+    -- ========== 恒星光源 ==========
+    local lightNode = node:CreateChild("StarLight")
+    local light = lightNode:CreateComponent("Light")
+    light.lightType = LIGHT_POINT
+    light.range = 400.0
+    light.brightness = 2.2
+    light.color = Color(color[1], color[2], color[3])
+    light.castShadows = true
+
+    -- 保存各层引用用于动态更新
+    starLayers_ = {
+        body = bodyNode,
+        bodyMat = bodyModel:GetMaterial(0),
+        corona = coronaNode,
+        coronaMat = coronaModel:GetMaterial(0),
+        coronaBaseScale = coronaScale,
+        flare = flareNode,
+        flareBbs = flareBbs,
+        flareBaseAlpha = 0.18,
+        baseColor = color,
+    }
+
+    return node
+end
+
+------------------------------------------------------------
+-- 创建行星
+------------------------------------------------------------
+local function BuildPlanet(parentNode, planetData, index)
+    -- 行星轨道锚点节点（用于公转）
+    local orbitNode = parentNode:CreateChild("PlanetOrbit_" .. index)
+
+    -- 行星实体节点（偏离中心 orbitRadius 距离）
+    local planetNode = orbitNode:CreateChild("Planet_" .. index)
+    planetNode:SetPosition(Vector3(planetData.orbitRadius, 0, 0))
+
+    local model = planetNode:CreateComponent("StaticModel")
+    model:SetModel(cache:GetResource("Model", "Models/Sphere.mdl"))
+    model:SetMaterial(CreatePlanetMaterial(
+        planetData.color[1], planetData.color[2], planetData.color[3],
+        planetData.type
+    ))
+
+    local s = planetData.size
+    planetNode:SetScale(Vector3(s, s, s))
+
+    -- 气态巨行星的环
+    if planetData.hasRing then
+        local ringNode = planetNode:CreateChild("Ring")
+        local ringModel = ringNode:CreateComponent("StaticModel")
+        ringModel:SetModel(cache:GetResource("Model", "Models/Torus.mdl"))
+        -- Torus 默认大小约 1.0，缩放到比行星略大
+        local ringScale = s * 2.0
+        ringNode:SetScale(Vector3(ringScale, ringScale * 0.05, ringScale))
+        local ringMat = CreatePlanetMaterial(
+            planetData.color[1] * 0.7,
+            planetData.color[2] * 0.7,
+            planetData.color[3] * 0.6
+        )
+        ringModel:SetMaterial(ringMat)
+        -- 环稍微倾斜
+        ringNode:SetRotation(Quaternion(15, Vector3.RIGHT))
+    end
+
+    -- 设置初始公转角度
+    orbitNode:SetRotation(Quaternion(
+        math.deg(planetData.startAngle), Vector3.UP
+    ))
+
+    return orbitNode
+end
+
+------------------------------------------------------------
+-- 创建小行星带
+------------------------------------------------------------
+local function BuildAsteroidBelt(parentNode, density, innerRadius, outerRadius)
+    local count = math.floor(density * 40) + 10
+    local nodes = {}
+
+    for i = 1, count do
+        local angle = math.random() * math.pi * 2
+        local radius = innerRadius + math.random() * (outerRadius - innerRadius)
+        local height = (math.random() - 0.5) * 8.0
+
+        local node = parentNode:CreateChild("Asteroid_" .. i)
+        node:SetPosition(Vector3(
+            math.cos(angle) * radius,
+            height,
+            math.sin(angle) * radius
+        ))
+
+        -- 随机旋转
+        node:SetRotation(Quaternion(
+            math.random() * 360, Vector3(math.random(), math.random(), math.random()):Normalized()
+        ))
+
+        -- 随机大小（2~6米，接近战舰尺寸的1/4~3/4）
+        local s = 2.0 + math.random() * 4.0
+        -- 不规则形状：使用不等比缩放的 Box 或 Sphere
+        local sx = s * (0.6 + math.random() * 0.8)
+        local sy = s * (0.5 + math.random() * 0.7)
+        local sz = s * (0.6 + math.random() * 0.8)
+        node:SetScale(Vector3(sx, sy, sz))
+
+        local model = node:CreateComponent("StaticModel")
+        -- 随机选择模型
+        local models = {"Models/Box.mdl", "Models/Sphere.mdl"}
+        local mdlIdx = math.random(1, #models)
+        model:SetModel(cache:GetResource("Model", models[mdlIdx]))
+        model:SetMaterial(CreateAsteroidMaterial())
+
+        -- 给每个小行星存储旋转速度
+        node.rotSpeed = (math.random() - 0.5) * 30
+
+        nodes[i] = node
+    end
+
+    return nodes
+end
+
+------------------------------------------------------------
+-- 创建空间站（简单几何体组合）
+------------------------------------------------------------
+local function BuildSpaceStation(parentNode, orbitRadius)
+    local orbitNode = parentNode:CreateChild("StationOrbit")
+    local stationNode = orbitNode:CreateChild("SpaceStation")
+    stationNode:SetPosition(Vector3(orbitRadius, 2, 0))
+
+    -- 主体圆柱
+    local bodyNode = stationNode:CreateChild("Body")
+    local bodyModel = bodyNode:CreateComponent("StaticModel")
+    bodyModel:SetModel(cache:GetResource("Model", "Models/Cylinder.mdl"))
+    bodyNode:SetScale(Vector3(2.0, 3.0, 2.0))
+    local stationMat = Material:new()
+    stationMat:SetTechnique(0, cache:GetResource("Technique", "Techniques/PBR/PBRNoTexture.xml"))
+    stationMat:SetShaderParameter("MatDiffColor", Variant(Vector4(0.6, 0.65, 0.7, 1.0)))
+    stationMat:SetShaderParameter("Roughness", Variant(0.3))
+    stationMat:SetShaderParameter("Metallic", Variant(0.9))
+    bodyModel:SetMaterial(stationMat)
+
+    -- 环形结构（Torus）
+    local ringNode = stationNode:CreateChild("Ring")
+    local ringModel = ringNode:CreateComponent("StaticModel")
+    ringModel:SetModel(cache:GetResource("Model", "Models/Torus.mdl"))
+    ringNode:SetScale(Vector3(4.0, 4.0, 4.0))
+    ringNode:SetPosition(Vector3(0, 0, 0))
+    local ringMat = Material:new()
+    ringMat:SetTechnique(0, cache:GetResource("Technique", "Techniques/PBR/PBRNoTexture.xml"))
+    ringMat:SetShaderParameter("MatDiffColor", Variant(Vector4(0.5, 0.55, 0.6, 1.0)))
+    ringMat:SetShaderParameter("Roughness", Variant(0.35))
+    ringMat:SetShaderParameter("Metallic", Variant(0.85))
+    ringModel:SetMaterial(ringMat)
+
+    -- 信号灯（发光小球）
+    local beaconNode = stationNode:CreateChild("Beacon")
+    beaconNode:SetPosition(Vector3(0, 2.0, 0))
+    local beaconModel = beaconNode:CreateComponent("StaticModel")
+    beaconModel:SetModel(cache:GetResource("Model", "Models/Sphere.mdl"))
+    beaconNode:SetScale(Vector3(0.3, 0.3, 0.3))
+    beaconModel:SetMaterial(CreateEmissiveMaterial(0.2, 1.0, 0.4, 3.0))
+
+    -- 初始角度
+    orbitNode:SetRotation(Quaternion(math.random() * 360, Vector3.UP))
+
+    return orbitNode
+end
+
+------------------------------------------------------------
+-- 公开接口
+------------------------------------------------------------
+
+--- 构建星系3D内容
+---@param scene any Scene 对象
+---@param parentNode any 根节点
+---@param data table 星系数据（来自 GalaxyData）
+function StarSystem.Build(scene, parentNode, data)
+    -- 清理旧内容
+    StarSystem.Clear()
+
+    scene_ = scene
+    rootNode_ = parentNode
+    systemData_ = data
+    planetNodes_ = {}
+    asteroidNodes_ = {}
+
+    print("[StarSystem] Building: " .. data.name .. " (" .. data.starTypeName .. ")")
+
+    -- 1. 创建恒星 (缩小到0.75倍, 避免过大遮挡星云深空感)
+    starNode_ = BuildStar(rootNode_, data.starColor, data.starSize * 0.75, "MainStar")
+    starNode_:SetPosition(Vector3(0, 0, 0))
+
+    -- 2. 双星系统第二颗星
+    if data.secondStar then
+        local ss = data.secondStar
+        secondStarNode_ = BuildStar(rootNode_, ss.color, ss.size, "SecondStar")
+        secondStarNode_:SetPosition(Vector3(ss.orbitRadius, 0, 0))
+    end
+
+    -- 3. 创建行星
+    for i, pdata in ipairs(data.planets) do
+        local orbitNode = BuildPlanet(rootNode_, pdata, i)
+        planetNodes_[i] = { node = orbitNode, data = pdata }
+    end
+
+    -- 4. 小行星带（在最外层行星之外）
+    local outerRadius = 240 + #data.planets * 180 + 80
+    local innerRadius = outerRadius - 60
+    asteroidNodes_ = BuildAsteroidBelt(rootNode_, data.asteroidDensity, innerRadius, outerRadius + 40)
+
+    -- 5. 空间站
+    if data.hasStation then
+        local stationOrbitR = 240 + math.floor(#data.planets / 2) * 180 + 30
+        BuildSpaceStation(rootNode_, stationOrbitR)
+    end
+
+    print("[StarSystem] Build complete: " .. #data.planets .. " planets, " .. #asteroidNodes_ .. " asteroids")
+end
+
+--- 每帧更新天体动画（行星公转、恒星脉动、小行星自转）
+---@param dt number 帧时间
+---@param elapsedTime number 总已过时间
+function StarSystem.Update(dt, elapsedTime)
+    if not systemData_ then return end
+
+    -- 行星公转
+    for i, pInfo in ipairs(planetNodes_) do
+        local node = pInfo.node
+        local data = pInfo.data
+        local angle = data.startAngle + elapsedTime * data.orbitSpeed
+        node:SetRotation(Quaternion(math.deg(angle), Vector3.UP))
+    end
+
+    -- 双星公转
+    if secondStarNode_ and systemData_.secondStar then
+        local ss = systemData_.secondStar
+        local angle = elapsedTime * ss.orbitSpeed
+        local x = math.cos(angle) * ss.orbitRadius
+        local z = math.sin(angle) * ss.orbitRadius
+        secondStarNode_:SetPosition(Vector3(x, 0, z))
+    end
+
+    -- 恒星多层动态效果
+    if starNode_ and starLayers_ then
+        local baseSize = systemData_.starSize * 0.75
+        local color = starLayers_.baseColor
+
+        -- 1. 恒星本体轻微缩放脉动
+        local bodyPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.008
+        starNode_:SetScale(Vector3(baseSize * bodyPulse, baseSize * bodyPulse, baseSize * bodyPulse))
+
+        -- 2. 表面 UV 流动（通过旋转本体模拟）
+        local bodyRotY = elapsedTime * 2.0    -- 缓慢自转（度/秒）
+        local bodyRotX = elapsedTime * 0.8    -- 轻微俯仰变化
+        starLayers_.body:SetRotation(Quaternion(bodyRotY, Vector3.UP) * Quaternion(bodyRotX, Vector3.RIGHT))
+
+        -- 3. 自发光脉冲（emissive 强度围绕 3.0 轻微变化）
+        local emPulse = 3.0 + math.sin(elapsedTime * 0.35) * 0.25
+            + math.sin(elapsedTime * 0.83) * 0.12
+        starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
+            color[1] * emPulse, color[2] * emPulse, color[3] * emPulse
+        )))
+
+        -- 4. 日冕呼吸（缩放 + 透明度轻微变化）
+        local coronaBreath = starLayers_.coronaBaseScale
+            + math.sin(elapsedTime * 0.25) * 0.04
+            + math.sin(elapsedTime * 0.61) * 0.02
+        starLayers_.corona:SetScale(Vector3(coronaBreath, coronaBreath, coronaBreath))
+        -- 日冕缓慢旋转
+        starLayers_.corona:SetRotation(Quaternion(elapsedTime * 0.7, Vector3.UP))
+        local coronaAlpha = 0.32 + math.sin(elapsedTime * 0.3) * 0.03
+        starLayers_.coronaMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
+            color[1], color[2], color[3], coronaAlpha
+        )))
+
+        -- 5. Flare 透明度微变
+        local flareAlpha = starLayers_.flareBaseAlpha
+            + math.sin(elapsedTime * 0.45) * 0.02
+            + math.sin(elapsedTime * 1.1) * 0.015
+        local flareMat = starLayers_.flareBbs:GetMaterial()
+        if flareMat then
+            flareMat:SetShaderParameter("MatDiffColor", Variant(Vector4(
+                color[1] * 1.2, color[2] * 0.9, color[3] * 0.8, flareAlpha
+            )))
+        end
+    elseif starNode_ then
+        -- 降级：简单脉动（无贴图时）
+        local pulse = 1.0 + math.sin(elapsedTime * 1.5) * 0.02
+        local baseSize = systemData_.starSize * 0.75
+        starNode_:SetScale(Vector3(baseSize * pulse, baseSize * pulse, baseSize * pulse))
+    end
+
+    -- 小行星自转
+    for _, node in ipairs(asteroidNodes_) do
+        if node.rotSpeed then
+            local currentRot = node:GetRotation()
+            node:SetRotation(currentRot * Quaternion(node.rotSpeed * dt, Vector3.UP))
+        end
+    end
+end
+
+--- 清理当前星系内容
+function StarSystem.Clear()
+    if rootNode_ then
+        rootNode_:RemoveAllChildren()
+    end
+    planetNodes_ = {}
+    asteroidNodes_ = {}
+    starNode_ = nil
+    starLayers_ = nil
+    secondStarNode_ = nil
+    systemData_ = nil
+    print("[StarSystem] Cleared")
+end
+
+--- 获取当前星系数据
+---@return table|nil
+function StarSystem.GetCurrentData()
+    return systemData_
+end
+
+return StarSystem
