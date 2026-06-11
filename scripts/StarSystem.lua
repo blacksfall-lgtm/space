@@ -100,6 +100,7 @@ local STAR_TEXTURES = {
 local STAR_RENDER_DEBUG_BODY_ONLY = false  -- Phase 1 已通过，进入正式渲染
 local STAR_ENABLE_CORONA = true            -- 小范围日冕（Scale≤1.25, Alpha≤0.10）
 local STAR_ENABLE_FLARE  = false           -- 耀斑关闭
+local STAR_ENABLE_RING_GLOW = true         -- Billboard环形辉光（中心透明，不遮挡星体）
 
 -- 恒星各层节点引用（用于动态更新）
 local starLayers_ = nil
@@ -195,67 +196,34 @@ local function BuildStar(parentNode, color, size, name)
     bodyModel:SetMaterial(CreateStarBodyMaterial(color))
     bodyModel.castShadows = false
 
-    -- ========== Layer 2: 多层半透明球体发光（差速旋转产生等离子流动感） ==========
-    -- 原理：半透明球壳叠加，边缘处多层 alpha 重叠自然产生发光描边效果
-    -- 差速旋转让不同层交错，模拟等离子体流动
-    local glowShells = {}  -- { {node, model, mat, baseScale, baseAlpha, color, rotAxis, rotSpeed}, ... }
+    -- ========== Layer 2: Billboard 环形辉光（中心透明，不遮挡星体） ==========
+    -- 原理：使用中心黑色/透明的环形贴图 + 加法混合(DiffAddAlpha)
+    -- 贴图只在边缘有光，中心完全透明 → 星体本体不被遮挡
+    -- 多层不同大小/角度的 Billboard 叠加产生柔和光晕
+    local ringGlowLayers = {}  -- { {node, bbs, mat, baseSize, baseAlpha}, ... }
 
-    local GLOW_SPHERE_LAYERS = {
-        -- 大幅降低透明度：Bloom 负责主要辉光，球壳只做流动层次辅助
-        -- Layer A: 中层等离子（暖橙色，紧贴星体）
-        {
-            scale = 1.08, alpha = 0.08,
-            color = {1.0, 0.55, 0.15},
-            emissive = {3.0, 1.2, 0.2},   -- 高emissive 驱动额外 bloom
-            rotAxis = Vector3(0.4, 1.0, 0.2):Normalized(),
-            rotSpeed = 10,
-        },
-        -- Layer B: 外层等离子（深红，略大）
-        {
-            scale = 1.18, alpha = 0.05,
-            color = {0.9, 0.3, 0.08},
-            emissive = {2.0, 0.5, 0.1},
-            rotAxis = Vector3(0.2, 0.8, 0.5):Normalized(),
-            rotSpeed = -6,
-        },
-        -- Layer C: 最外晕（淡红，最大最透，几乎不可见，只增加 bloom 范围）
-        {
-            scale = 1.32, alpha = 0.03,
-            color = {0.8, 0.2, 0.05},
-            emissive = {1.0, 0.25, 0.05},
-            rotAxis = Vector3(-0.3, 1.0, -0.4):Normalized(),
-            rotSpeed = 4,
-        },
+    -- 环形辉光配置：紧贴星体边缘，不同尺寸产生层次感
+    local RING_GLOW_CONFIG = {
+        -- Layer A: 最紧贴（暖橙色，略大于星体）
+        { size = 1.12, alpha = 0.18, r = 1.0, g = 0.55, b = 0.15 },
+        -- Layer B: 中间层（深橙红）
+        { size = 1.22, alpha = 0.12, r = 0.95, g = 0.40, b = 0.10 },
+        -- Layer C: 最外层（淡红，最大）
+        { size = 1.38, alpha = 0.06, r = 0.85, g = 0.25, b = 0.05 },
     }
 
-    if not STAR_RENDER_DEBUG_BODY_ONLY then
-        for i, layer in ipairs(GLOW_SPHERE_LAYERS) do
-            local shellNode = node:CreateChild("StarGlowShell_" .. i)
-            shellNode:SetScale(layer.scale)
-            -- 给初始旋转一个偏移，避免所有层初始对齐
-            shellNode:SetRotation(Quaternion(i * 37, layer.rotAxis))
-
-            local shellModel = shellNode:CreateComponent("StaticModel")
-            shellModel:SetModel(cache:GetResource("Model", "Models/Sphere.mdl"))
-
-            local mat = Material:new()
-            mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/PBR/PBRNoTextureAlpha.xml"))
-            mat:SetShaderParameter("MatDiffColor", Variant(Vector4(
-                layer.color[1], layer.color[2], layer.color[3], layer.alpha
-            )))
-            mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
-                layer.emissive[1], layer.emissive[2], layer.emissive[3]
-            )))
-            mat:SetShaderParameter("MatRoughness", Variant(0.4))
-            mat:SetShaderParameter("MatMetallic", Variant(0.0))
-            shellModel:SetMaterial(mat)
-            shellModel.castShadows = false
-
-            glowShells[i] = {
-                node = shellNode, model = shellModel, mat = mat,
-                baseAlpha = layer.alpha, baseScale = layer.scale,
-                color = layer.color, emissive = layer.emissive,
-                rotAxis = layer.rotAxis, rotSpeed = layer.rotSpeed,
+    if (not STAR_RENDER_DEBUG_BODY_ONLY) and STAR_ENABLE_RING_GLOW then
+        for i, cfg in ipairs(RING_GLOW_CONFIG) do
+            local ringNode, ringBbs, ringMat = CreateStarBillboard(
+                node, "StarRingGlow_" .. i,
+                "image/恒星贴图/star_ring_glow.png",
+                cfg.size,
+                cfg.r, cfg.g, cfg.b, cfg.alpha
+            )
+            ringGlowLayers[i] = {
+                node = ringNode, bbs = ringBbs, mat = ringMat,
+                baseSize = cfg.size, baseAlpha = cfg.alpha,
+                color = {cfg.r, cfg.g, cfg.b},
             }
         end
     end
@@ -304,7 +272,7 @@ local function BuildStar(parentNode, color, size, name)
     starLayers_ = {
         body = bodyNode,
         bodyMat = bodyModel:GetMaterial(0),
-        glowShells = glowShells,  -- 多层发光球壳数组
+        ringGlowLayers = ringGlowLayers,  -- Billboard环形辉光数组
         corona = coronaNode,
         coronaBbs = coronaBbs,
         coronaMat = coronaMat,
@@ -565,30 +533,28 @@ function StarSystem.Update(dt, elapsedTime)
             0.15 * emPulse
         )))
 
-        -- 多层发光球壳：差速旋转 + 呼吸脉动
-        if starLayers_.glowShells then
-            for i, shell in ipairs(starLayers_.glowShells) do
-                if shell.node and shell.mat then
-                    -- 差速旋转（每层不同轴和速度，产生等离子流动感）
-                    shell.node:SetRotation(Quaternion(
-                        elapsedTime * shell.rotSpeed, shell.rotAxis
-                    ))
-                    -- 呼吸脉动：alpha + emissive 微弱起伏
-                    local freq = 0.4 + i * 0.25
-                    local breathe = 1.0 + math.sin(elapsedTime * freq) * 0.12
-                        + math.sin(elapsedTime * freq * 2.3) * 0.06
-                    local shellAlpha = shell.baseAlpha * breathe
-                    shell.mat:SetShaderParameter("MatDiffColor", Variant(Vector4(
-                        shell.color[1], shell.color[2], shell.color[3], shellAlpha
+        -- Billboard 环形辉光：呼吸脉动（尺寸 + 透明度微变）
+        if starLayers_.ringGlowLayers then
+            for i, ring in ipairs(starLayers_.ringGlowLayers) do
+                if ring.bbs and ring.mat then
+                    -- 呼吸脉动：每层频率错开
+                    local freq = 0.3 + i * 0.2
+                    local breathe = 1.0 + math.sin(elapsedTime * freq) * 0.15
+                        + math.sin(elapsedTime * freq * 1.7) * 0.08
+
+                    -- alpha 微变
+                    local alpha = ring.baseAlpha * breathe
+                    ring.mat:SetShaderParameter("MatDiffColor", Variant(Vector4(
+                        ring.color[1], ring.color[2], ring.color[3], alpha
                     )))
-                    shell.mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
-                        shell.emissive[1] * breathe,
-                        shell.emissive[2] * breathe,
-                        shell.emissive[3] * breathe
-                    )))
-                    -- 尺寸微弱呼吸（±3%）
-                    local scalePulse = shell.baseScale * (1.0 + math.sin(elapsedTime * freq * 0.7) * 0.03)
-                    shell.node:SetScale(scalePulse)
+
+                    -- 尺寸微弱呼吸（±4%）
+                    local sizePulse = ring.baseSize * (1.0 + math.sin(elapsedTime * freq * 0.6) * 0.04)
+                    local bb = ring.bbs:GetBillboard(0)
+                    if bb then
+                        bb.size = Vector2(sizePulse, sizePulse)
+                        ring.bbs:Commit()
+                    end
                 end
             end
         end
