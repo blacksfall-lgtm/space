@@ -370,11 +370,8 @@ function SpaceEnvironment.Update(dt, elapsedTime, camX, camZ, shipSpeed, camZoom
     lastCamX_ = camX
     lastCamZ_ = camZ
 
-    -- 缩放动态强度: zoom 越大(拉远)星云越明显, zoom 越小(拉近)星云越淡
-    -- zoom 范围: 0.3x ~ 32x, 基准 1.0x
-    -- 公式: zoomIntensity = clamp(0.6 + 0.4 * (zoom / 2.0), 0.4, 1.3)
-    -- zoom=0.3 → ~0.66, zoom=1.0 → 0.8, zoom=4.0 → 1.4→clamp=1.3
-    local zoomIntensity = math.max(0.4, math.min(1.3, 0.6 + 0.4 * (camZoom / 2.0)))
+    -- 深空背景强度固定，不随镜头缩放变化
+    local zoomIntensity = 1.0
 
     for _, layer in ipairs(bgPlanes_) do
         -- 平面完全跟随相机位置 (消除矩形边缘)

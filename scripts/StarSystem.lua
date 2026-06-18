@@ -6,6 +6,10 @@
 
 local StarSystem = {}
 
+-- ========== 全局缩放参数 ==========
+-- 修改此值可整体放大/缩小恒星（默认3.0 = 3倍）
+local STAR_SCALE = 3.0
+
 -- 内部引用
 local rootNode_ = nil
 local scene_ = nil
@@ -132,11 +136,11 @@ local function CreateStarBodyMaterial(color)
         return mat
     end
 
-    -- DiffColor 暗红：让贴图纹理细节充分可见
-    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(0.55, 0.18, 0.10, 1.0)))
+    -- DiffColor：红巨星暖色调
+    mat:SetShaderParameter("MatDiffColor", Variant(Vector4(0.85, 0.40, 0.28, 1.0)))
 
-    -- 低自发光：低于 bloomThreshold(0.8)，不产生过曝；辉光由 Billboard 环提供
-    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.35, 0.06, 0.01)))
+    -- 极低自发光：暖红色，仅防止暗面全黑
+    mat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(0.08, 0.015, 0.003)))
 
     return mat
 end
@@ -202,25 +206,25 @@ local function BuildStar(parentNode, color, size, name)
     -- 多层不同大小/角度的 Billboard 叠加产生柔和光晕
     local ringGlowLayers = {}  -- { {node, bbs, mat, baseSize, baseAlpha}, ... }
 
-    -- 环形辉光配置：贴紧星体边缘
-    -- 贴图 ringRadius=0.85，星体直径=1.0(半径0.5)
-    -- 环峰值距中心 = size/2 * 0.85，要让峰值刚好在星体边缘(0.5)附近
-    -- size = 0.5*2/0.85 ≈ 1.176 → 峰值在星体边缘；但可见部分只有外侧衰减尾
-    -- 用更小的 size 让环更紧贴
+    -- 边缘辉光配置：Fresnel rim 效果（参考图技术），红巨星暖色调
+    -- 贴图 star_edge_glow_fresnel.png：中心黑色(r<0.60)，峰值在 0.72~0.82，外侧高斯衰减
+    -- 星体 Sphere 半径=0.5，Billboard size=1.0 时贴图完整覆盖
+    -- size=1.40 → 贴图峰值 0.72 对应实际半径 1.40*0.72/2=0.504 ≈ 星体边缘
     local RING_GLOW_CONFIG = {
-        -- Layer A: 最紧贴（峰值在星体内侧，只露外衰减尾）
-        { size = 0.60, alpha = 0.25, r = 1.0, g = 0.55, b = 0.15 },
-        -- Layer B: 中间层
-        { size = 0.66, alpha = 0.18, r = 0.95, g = 0.40, b = 0.10 },
-        -- Layer C: 最外层（稍远，柔和衰减）
-        { size = 0.74, alpha = 0.10, r = 0.85, g = 0.25, b = 0.05 },
+        -- Layer A: 紧贴边缘，亮橙黄（最亮，触发 Bloom）
+        -- 星体边缘在纹理r=1/1.12=0.893，贴图峰值0.85~0.95覆盖边缘
+        { size = 1.12, alpha = 0.95, r = 1.0, g = 0.65, b = 0.25 },
+        -- Layer B: 稍外扩散，暖橙色（星体边缘r=1/1.22=0.820）
+        { size = 1.22, alpha = 0.55, r = 1.0, g = 0.45, b = 0.12 },
+        -- Layer C: 外缘柔光，深红橙（星体边缘r=1/1.35=0.741）
+        { size = 1.35, alpha = 0.30, r = 0.90, g = 0.30, b = 0.08 },
     }
 
     if (not STAR_RENDER_DEBUG_BODY_ONLY) and STAR_ENABLE_RING_GLOW then
         for i, cfg in ipairs(RING_GLOW_CONFIG) do
             local ringNode, ringBbs, ringMat = CreateStarBillboard(
                 node, "StarRingGlow_" .. i,
-                "image/恒星贴图/star_ring_glow.png",
+                "image/恒星贴图/star_edge_glow_fresnel.png",
                 cfg.size,
                 cfg.r, cfg.g, cfg.b, cfg.alpha
             )
@@ -454,8 +458,8 @@ function StarSystem.Build(scene, parentNode, data)
 
     print("[StarSystem] Building: " .. data.name .. " (" .. data.starTypeName .. ")")
 
-    -- 1. 创建恒星 (缩小到0.75倍, 避免过大遮挡星云深空感)
-    starNode_ = BuildStar(rootNode_, data.starColor, data.starSize * 0.75, "MainStar")
+    -- 1. 创建恒星 (基础0.75倍 × STAR_SCALE 全局缩放)
+    starNode_ = BuildStar(rootNode_, data.starColor, data.starSize * 0.75 * STAR_SCALE, "MainStar")
     starNode_:SetPosition(Vector3(0, 0, 0))
 
     -- 2. 双星系统第二颗星
@@ -510,7 +514,7 @@ function StarSystem.Update(dt, elapsedTime)
 
     -- 恒星多层动态效果
     if starNode_ and starLayers_ then
-        local baseSize = systemData_.starSize * 0.75
+        local baseSize = systemData_.starSize * 0.75 * STAR_SCALE
 
         -- 只保留缩放和旋转
         starNode_:SetScale(Vector3(baseSize, baseSize, baseSize))
@@ -528,13 +532,14 @@ function StarSystem.Update(dt, elapsedTime)
         -- 下面才允许正式版本的 emissive / corona / flare
         local color = starLayers_.baseColor
 
-        -- 低自发光脉冲：围绕 (0.35, 0.06, 0.01) 做 ±8% 微弱呼吸
+        -- 极低自发光脉冲：围绕 (0.08, 0.015, 0.003) 做 ±8% 微弱呼吸
+        -- 暖红色调，仅防止暗面全黑
         local emPulse = 1.0 + math.sin(elapsedTime * 0.35) * 0.06
             + math.sin(elapsedTime * 0.83) * 0.04
         starLayers_.bodyMat:SetShaderParameter("MatEmissiveColor", Variant(Vector3(
-            0.35 * emPulse,
-            0.06 * emPulse,
-            0.01 * emPulse
+            0.08 * emPulse,
+            0.015 * emPulse,
+            0.003 * emPulse
         )))
 
         -- Billboard 环形辉光：呼吸脉动（尺寸 + 透明度微变）
@@ -581,7 +586,7 @@ function StarSystem.Update(dt, elapsedTime)
     elseif starNode_ then
         -- 降级：简单脉动（无贴图时）
         local pulse = 1.0 + math.sin(elapsedTime * 1.5) * 0.02
-        local baseSize = systemData_.starSize * 0.75
+        local baseSize = systemData_.starSize * 0.75 * STAR_SCALE
         starNode_:SetScale(Vector3(baseSize * pulse, baseSize * pulse, baseSize * pulse))
     end
 
